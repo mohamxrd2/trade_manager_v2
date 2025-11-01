@@ -9,6 +9,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 class Collaborator extends Model
 {
     use HasUuids;
+    
 
     /**
      * The attributes that are mass assignable.
@@ -20,7 +21,6 @@ class Collaborator extends Model
         'name',
         'phone',
         'part',
-        'wallet',
         'image',
     ];
 
@@ -49,7 +49,6 @@ class Collaborator extends Model
      */
     protected $casts = [
         'part' => 'decimal:2',
-        'wallet' => 'decimal:2',
     ];
 
     /**
@@ -58,5 +57,25 @@ class Collaborator extends Model
     public function user(): BelongsTo
     {
         return $this->belongsTo(User::class);
+    }
+
+    /**
+     * Get the calculated wallet attribute.
+     * Calculé comme : calculated_wallet * (part / 100)
+     */
+    public function getWalletAttribute(): float
+    {
+        $user = $this->user;
+        if (!$user) {
+            return 0.0;
+        }
+
+        // Calculer le wallet de l'utilisateur
+        $totalSale = $user->transactions()->where('type', 'sale')->sum('amount') ?? 0;
+        $totalExpense = $user->transactions()->where('type', 'expense')->sum('amount') ?? 0;
+        $calculatedWallet = $totalSale - $totalExpense;
+
+        // Calculer la part du collaborateur
+        return (float) bcmul($calculatedWallet, bcdiv($this->part, 100, 4), 2);
     }
 }

@@ -9,6 +9,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 class Transaction extends Model
 {
     use HasUuids; // Utiliser UUIDs pour la clé primaire
+    
 
     /**
      * The attributes that are mass assignable.

@@ -45,11 +45,26 @@ class ArticleController extends Controller
     {
         try {
             $validator = Validator::make($request->all(), [
-                'name' => 'required|string|max:255',
+                'name' => 'required|string|max:255|unique:articles,name,NULL,id,user_id,' . Auth::id(),
                 'sale_price' => 'required|numeric|min:0',
                 'quantity' => 'required|integer|min:0',
                 'type' => 'required|in:simple,variable',
                 'image' => 'nullable|string|max:255',
+            ], [
+                'name.required' => 'Le nom de l\'article est obligatoire',
+                'name.string' => 'Le nom de l\'article doit être une chaîne de caractères',
+                'name.max' => 'Le nom de l\'article ne peut pas dépasser 255 caractères',
+                'name.unique' => 'Un article avec ce nom existe déjà',
+                'sale_price.required' => 'Le prix de vente est obligatoire',
+                'sale_price.numeric' => 'Le prix de vente doit être un nombre',
+                'sale_price.min' => 'Le prix de vente doit être supérieur ou égal à 0',
+                'quantity.required' => 'La quantité est obligatoire',
+                'quantity.integer' => 'La quantité doit être un nombre entier',
+                'quantity.min' => 'La quantité doit être supérieure ou égale à 0',
+                'type.required' => 'Le type d\'article est obligatoire',
+                'type.in' => 'Le type d\'article doit être "simple" ou "variable"',
+                'image.string' => 'L\'image doit être une chaîne de caractères',
+                'image.max' => 'Le nom de l\'image ne peut pas dépasser 255 caractères',
             ]);
 
             if ($validator->fails()) {
@@ -143,10 +158,23 @@ class ArticleController extends Controller
             }
 
             $validator = Validator::make($request->all(), [
-                'name' => 'required|string|max:255',
+                'name' => 'required|string|max:255|unique:articles,name,' . $id . ',id,user_id,' . Auth::id(),
                 'sale_price' => 'required|numeric|min:0',
                 'quantity' => 'required|integer|min:0',
                 'image' => 'nullable|string|max:255',
+            ], [
+                'name.required' => 'Le nom de l\'article est obligatoire',
+                'name.string' => 'Le nom de l\'article doit être une chaîne de caractères',
+                'name.max' => 'Le nom de l\'article ne peut pas dépasser 255 caractères',
+                'name.unique' => 'Un article avec ce nom existe déjà',
+                'sale_price.required' => 'Le prix de vente est obligatoire',
+                'sale_price.numeric' => 'Le prix de vente doit être un nombre',
+                'sale_price.min' => 'Le prix de vente doit être supérieur ou égal à 0',
+                'quantity.required' => 'La quantité est obligatoire',
+                'quantity.integer' => 'La quantité doit être un nombre entier',
+                'quantity.min' => 'La quantité doit être supérieure ou égale à 0',
+                'image.string' => 'L\'image doit être une chaîne de caractères',
+                'image.max' => 'Le nom de l\'image ne peut pas dépasser 255 caractères',
             ]);
 
             if ($validator->fails()) {

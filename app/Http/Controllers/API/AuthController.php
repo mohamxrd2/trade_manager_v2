@@ -65,21 +65,19 @@ class AuthController extends Controller
             ];
         }
 
-        // Try to authenticate
-        if (Auth::attempt($credentials, $remember)) {
-            $user = Auth::user();
+        // Find user by email or username
+        $user = null;
+        if ($isEmail) {
+            $user = \App\Models\User::where('email', $loginField)->first();
+        } else {
+            $user = \App\Models\User::where('username', $loginField)->first();
+        }
 
-            // Ensure $user is an instance of App\Models\User and supports createToken
-            if ($user instanceof \App\Models\User && method_exists($user, 'createToken')) {
-                // Create token with longer expiration if remember me is checked
-                $tokenName = $remember ? 'remember_token' : 'auth_token';
-                $token = $user->createToken($tokenName)->plainTextToken;
-            } else {
-                return response()->json([
-                    'success' => false,
-                    'message' => 'Erreur interne lors de la génération du token'
-                ], 500);
-            }
+        // Check if user exists and password is correct
+        if ($user && \Illuminate\Support\Facades\Hash::check($password, $user->password)) {
+            // Create token with longer expiration if remember me is checked
+            $tokenName = $remember ? 'remember_token' : 'auth_token';
+            $token = $user->createToken($tokenName)->plainTextToken;
 
             return response()->json([
                 'success' => true,

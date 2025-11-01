@@ -10,6 +10,7 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
 class Article extends Model
 {
     use HasUuids;
+    
 
     /**
      * The attributes that are mass assignable.

@@ -96,6 +96,18 @@ class VariationController extends Controller
                 'name' => 'required|string|max:255',
                 'quantity' => 'required|integer|min:0',
                 'image' => 'nullable|string|max:255',
+            ],[
+                'article_id.required' => 'L\'article est obligatoire',
+                'article_id.string' => 'L\'article doit être une chaîne de caractères',
+                'article_id.exists' => 'L\'article n\'existe pas',
+                'name.required' => 'Le nom de la variation est obligatoire',
+                'name.string' => 'Le nom de la variation doit être une chaîne de caractères',
+                'name.max' => 'Le nom de la variation ne peut pas dépasser 255 caractères',
+                'quantity.required' => 'La quantité est obligatoire',
+                'quantity.integer' => 'La quantité doit être un nombre entier',
+                'quantity.min' => 'La quantité doit être supérieure ou égale à 0',
+                'image.string' => 'L\'image doit être une chaîne de caractères',
+                'image.max' => 'Le nom de l\'image ne peut pas dépasser 255 caractères',
             ]);
 
             if ($validator->fails()) {

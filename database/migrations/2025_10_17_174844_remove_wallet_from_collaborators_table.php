@@ -11,8 +11,8 @@ return new class extends Migration
      */
     public function up(): void
     {
-        Schema::table('transactions', function (Blueprint $table) {
-            $table->decimal('sale_price', 15, 2)->nullable()->after('amount');
+        Schema::table('collaborators', function (Blueprint $table) {
+            $table->dropColumn('wallet');
         });
     }
 
@@ -21,8 +21,8 @@ return new class extends Migration
      */
     public function down(): void
     {
-        Schema::table('transactions', function (Blueprint $table) {
-            $table->dropColumn('sale_price');
+        Schema::table('collaborators', function (Blueprint $table) {
+            $table->decimal('wallet', 15, 2)->default(0);
         });
     }
 };

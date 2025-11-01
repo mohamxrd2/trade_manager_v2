@@ -6,21 +6,20 @@ use Illuminate\Support\Facades\Schema;
 
 return new class extends Migration
 {
+    public $withinTransaction = false;
+    
     /**
      * Run the migrations.
      */
     public function up(): void
     {
         Schema::create('variations', function (Blueprint $table) {
-            $table->uuid('id')->primary();
-            $table->uuid('article_id');
+            $table->id();
+            $table->foreignId('article_id')->constrained('articles')->onDelete('cascade');
             $table->string('name');
             $table->integer('quantity');
             $table->string('image')->nullable();
             $table->timestamps();
-            
-            // Clé étrangère vers articles.id (UUID)
-            $table->foreign('article_id')->references('id')->on('articles')->onDelete('cascade');
         });
     }
 

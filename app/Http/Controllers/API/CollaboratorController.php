@@ -22,7 +22,11 @@ class CollaboratorController extends Controller
         try {
             $collaborators = Collaborator::where('user_id', Auth::id())
                 ->orderBy('created_at', 'desc')
-                ->get();
+                ->get()
+                ->map(function ($collaborator) {
+                    $collaborator->wallet = $collaborator->wallet; // Force le calcul de l'accesseur
+                    return $collaborator;
+                });
 
             return response()->json([
                 'success' => true,
@@ -59,7 +63,8 @@ class CollaboratorController extends Controller
                 ], 422);
             }
 
-            return DB::transaction(function () use ($request) {
+            // Désactiver la transaction pour éviter les problèmes avec PostgreSQL
+            // return DB::transaction(function () use ($request) {
                 // Verrouiller la ligne utilisateur pour éviter les races conditions
                 $user = User::where('id', Auth::id())->lockForUpdate()->first();
 
@@ -78,9 +83,6 @@ class CollaboratorController extends Controller
                     ], 400);
                 }
 
-                // Calculer le wallet automatiquement : calculated_wallet * (part / 100)
-                $collaboratorWallet = bcmul($user->calculated_wallet, bcdiv($request->part, 100, 4), 2);
-
                 // Créer le collaborateur avec UUID généré automatiquement
                 $collaborator = Collaborator::create([
                     'id' => Str::uuid()->toString(),
@@ -88,7 +90,6 @@ class CollaboratorController extends Controller
                     'name' => $request->name,
                     'phone' => $request->phone,
                     'part' => $request->part,
-                    'wallet' => $collaboratorWallet,
                     'image' => $request->image ?? null,
                 ]);
 
@@ -101,7 +102,7 @@ class CollaboratorController extends Controller
                     'message' => 'Collaborator created',
                     'data' => $collaborator
                 ], 201);
-            });
+            // });
 
         } catch (\Exception $e) {
             return response()->json([
