@@ -23,6 +23,8 @@ use Illuminate\Support\Facades\Route;
 */
 
 // Public routes (no authentication required)
+// Note: La route /sanctum/csrf-cookie est gérée automatiquement par Sanctum
+
 Route::post('/register', [AuthController::class, 'register']);
 Route::post('/login', [AuthController::class, 'login']);
 

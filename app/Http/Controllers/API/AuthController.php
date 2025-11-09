@@ -3,7 +3,6 @@
 namespace App\Http\Controllers\API;
 
 use App\Http\Controllers\Controller;
-use App\Http\Requests\API\LoginRequest;
 use App\Http\Requests\API\RegisterRequest;
 use App\Models\User;
 use Illuminate\Http\JsonResponse;
@@ -28,73 +27,65 @@ class AuthController extends Controller
             'password' => Hash::make($request->password),
         ]);
 
-        $token = $user->createToken('auth_token')->plainTextToken;
+        // Connexion automatique après l'inscription
+        Auth::guard('web')->login($user);
 
-        return response()->json([
-            'success' => true,
-            'message' => 'Utilisateur créé avec succès',
-            'data' => [
-                'user' => $user,
-                'token' => $token,
-                'token_type' => 'Bearer'
-            ]
-        ], 201);
+        // Régénération de la session pour la sécurité
+        $request->session()->regenerate();
+
+        // Retourner directement l'utilisateur (format simplifié, comme login)
+        return response()->json($user, 201);
     }
 
     /**
      * Login user
      */
-    public function login(LoginRequest $request): JsonResponse
+    public function login(Request $request): JsonResponse
     {
-        $loginField = $request->input('login'); // email or username
+        // Validation : accepter soit 'email', soit 'username', soit 'login'
+        $request->validate([
+            'login' => 'sometimes|string',
+            'email' => 'sometimes|email',
+            'username' => 'sometimes|string',
+            'password' => 'required|string',
+        ]);
+
         $password = $request->input('password');
         $remember = $request->boolean('remember', false);
 
-        // Determine if login field is email or username
+        // Déterminer le champ de connexion (email ou username)
+        // Priorité: login > email > username
+        $loginField = $request->input('login') ?? $request->input('email') ?? $request->input('username');
+        
+        // Vérifier qu'au moins un champ de connexion est fourni
+        if (!$loginField) {
+            return response()->json(['message' => 'Email, username ou login requis'], 422);
+        }
+        
+        // Vérifier si c'est un email ou un username
         $isEmail = filter_var($loginField, FILTER_VALIDATE_EMAIL);
         
-        if ($isEmail) {
-            $credentials = [
-                'email' => $loginField,
-                'password' => $password
-            ];
-        } else {
-            $credentials = [
-                'username' => $loginField,
-                'password' => $password
-            ];
-        }
-
-        // Find user by email or username
+        // Rechercher l'utilisateur par email ou username
         $user = null;
         if ($isEmail) {
-            $user = \App\Models\User::where('email', $loginField)->first();
+            $user = User::where('email', $loginField)->first();
         } else {
-            $user = \App\Models\User::where('username', $loginField)->first();
+            $user = User::where('username', $loginField)->first();
         }
 
-        // Check if user exists and password is correct
-        if ($user && \Illuminate\Support\Facades\Hash::check($password, $user->password)) {
-            // Create token with longer expiration if remember me is checked
-            $tokenName = $remember ? 'remember_token' : 'auth_token';
-            $token = $user->createToken($tokenName)->plainTextToken;
-
-            return response()->json([
-                'success' => true,
-                'message' => 'Connexion réussie',
-                'data' => [
-                    'user' => $user,
-                    'token' => $token,
-                    'token_type' => 'Bearer',
-                    'remember' => $remember
-                ]
-            ]);
+        // Vérifier si l'utilisateur existe et si le mot de passe est correct
+        if (!$user || !Hash::check($password, $user->password)) {
+            return response()->json(['message' => 'Identifiants invalides'], 401);
         }
 
-        return response()->json([
-            'success' => false,
-            'message' => 'Identifiants invalides'
-        ], 401);
+        // Connexion de l'utilisateur avec le guard 'web'
+        Auth::guard('web')->login($user, $remember);
+
+        // Régénération de la session pour la sécurité
+        $request->session()->regenerate();
+
+        // Retourner directement l'utilisateur (format simplifié)
+        return response()->json($user);
     }
 
     /**
@@ -102,12 +93,14 @@ class AuthController extends Controller
      */
     public function logout(Request $request): JsonResponse
     {
-        $request->user()->currentAccessToken()->delete();
+        // Déconnexion avec le guard 'web'
+        Auth::guard('web')->logout();
 
-        return response()->json([
-            'success' => true,
-            'message' => 'Déconnexion réussie'
-        ]);
+        // Invalidation de la session
+        $request->session()->invalidate();
+        $request->session()->regenerateToken();
+
+        return response()->json(['message' => 'Déconnexion réussie']);
     }
 
     /**
@@ -115,11 +108,13 @@ class AuthController extends Controller
      */
     public function user(Request $request): JsonResponse
     {
-        return response()->json([
-            'success' => true,
-            'data' => [
-                'user' => $request->user()
-            ]
-        ]);
+        $user = Auth::guard('web')->user();
+
+        if (!$user) {
+            return response()->json(['message' => 'Non authentifié'], 401);
+        }
+
+        // Retourner directement l'utilisateur (format simplifié)
+        return response()->json($user);
     }
 }

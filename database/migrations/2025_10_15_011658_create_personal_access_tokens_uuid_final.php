@@ -17,20 +17,22 @@ return new class extends Migration
         // Activer l'extension UUID si pas déjà fait
         DB::statement('CREATE EXTENSION IF NOT EXISTS "uuid-ossp";');
         
-        Schema::create('personal_access_tokens', function (Blueprint $table) {
-            $table->id();
-            $table->uuid('tokenable_id');
-            $table->string('tokenable_type');
-            $table->string('name');
-            $table->string('token', 64)->unique();
-            $table->text('abilities')->nullable();
-            $table->timestamp('last_used_at')->nullable();
-            $table->timestamp('expires_at')->nullable();
-            $table->timestamps();
-            
-            // Index pour les relations morphs
-            $table->index(['tokenable_type', 'tokenable_id']);
-        });
+        if (!Schema::hasTable('personal_access_tokens')) {
+            Schema::create('personal_access_tokens', function (Blueprint $table) {
+                $table->id();
+                $table->uuid('tokenable_id');
+                $table->string('tokenable_type');
+                $table->string('name');
+                $table->string('token', 64)->unique();
+                $table->text('abilities')->nullable();
+                $table->timestamp('last_used_at')->nullable();
+                $table->timestamp('expires_at')->nullable();
+                $table->timestamps();
+                
+                // Index pour les relations morphs
+                $table->index(['tokenable_type', 'tokenable_id']);
+            });
+        }
     }
 
     /**
