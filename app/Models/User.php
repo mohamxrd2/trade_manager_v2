@@ -105,31 +105,7 @@ class User extends Authenticatable
         return $this->articles()->count();
     }
 
-    /**
-     * Get the total low stock attribute.
-     * 
-     * CORRECTION DU BUG "Division by zero" :
-     * 
-     * PROBLÈME INITIAL :
-     * La requête originale divisait par articles.quantity sans vérifier si cette valeur était 0,
-     * ce qui causait une erreur SQL "Division by zero" lorsque articles.quantity = 0.
-     * 
-     * SOLUTION IMPLÉMENTÉE :
-     * 1. Ajout de ->where('quantity', '>', 0) pour exclure les articles avec quantity = 0
-     *    Cela filtre en amont et évite d'exécuter la division pour ces articles.
-     * 
-     * 2. Utilisation de 100.0 au lieu de 100 pour forcer la division décimale (compatible PostgreSQL)
-     * 
-     * 3. La logique métier reste inchangée : on détecte les produits dont plus de 80% du stock est vendu
-     *    (quantité_vendue * 100 / quantité_totale > 80)
-     * 
-     * POURQUOI CELA CORRIGE DÉFINITIVEMENT L'ERREUR 500 :
-     * - Le where('quantity', '>', 0) garantit qu'aucun article avec quantity = 0 n'est traité
-     * - La division ne s'exécute donc jamais avec un diviseur à 0
-     * - Même si un article avec quantity = 0 existait par erreur, il serait ignoré
-     * - La méthode retourne toujours un entier (0 ou plus) sans jamais planter
-     * - Compatible PostgreSQL et conforme aux bonnes pratiques Eloquent
-     */
+   
     public function getTotalLowStockAttribute(): int
     {
         return $this->articles()
