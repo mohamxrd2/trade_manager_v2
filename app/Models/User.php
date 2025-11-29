@@ -98,6 +98,22 @@ class User extends Authenticatable
     }
 
     /**
+     * Get the company for the user.
+     */
+    public function company(): \Illuminate\Database\Eloquent\Relations\HasOne
+    {
+        return $this->hasOne(Company::class);
+    }
+
+    /**
+     * Get the settings for the user.
+     */
+    public function settings(): \Illuminate\Database\Eloquent\Relations\HasOne
+    {
+        return $this->hasOne(UserSetting::class);
+    }
+
+    /**
      * Get the total articles attribute.
      */
     public function getTotalArticlesAttribute(): int
@@ -105,17 +121,35 @@ class User extends Authenticatable
         return $this->articles()->count();
     }
 
-   
+    /**
+     * Get the total low stock attribute.
+     * 
+     * Retourne le nombre d'articles avec sales_percentage entre le seuil personnalisé et 100 (inclus).
+     * 
+     * Un article est considéré en stock faible si entre le seuil personnalisé (par défaut 80%) et 100% de sa quantité
+     * a été vendue (sales_percentage = (sold_quantity * 100) / quantity entre [seuil;100]).
+     * 
+     * Cette méthode utilise la même formule que getSalesPercentageAttribute() 
+     * dans le modèle Article pour garantir la cohérence.
+     * Le seuil est récupéré depuis les paramètres utilisateur (user_settings.low_stock_threshold).
+     */
     public function getTotalLowStockAttribute(): int
     {
+        // Récupérer le seuil personnalisé depuis les paramètres utilisateur (défaut: 80)
+        $lowStockThreshold = $this->settings?->low_stock_threshold ?? 80;
+
+        // Utiliser une requête SQL optimisée qui reproduit exactement la logique
+        // de sales_percentage du modèle Article : (sold_quantity * 100) / quantity entre [seuil;100]
         return $this->articles()
             ->where('quantity', '>', 0) // Exclure les articles avec quantity = 0 pour éviter la division par zéro
             ->whereRaw('(
-                SELECT COALESCE(SUM(quantity), 0) 
+                COALESCE((
+                    SELECT SUM(quantity) 
                 FROM transactions 
                 WHERE transactions.article_id = articles.id 
                 AND transactions.type = \'sale\'
-            ) * 100.0 / articles.quantity > 80')
+                ), 0) * 100.0 / articles.quantity
+            ) BETWEEN ? AND 100', [$lowStockThreshold])
             ->count();
     }
 

@@ -97,6 +97,12 @@ class CollaboratorController extends Controller
                 $user->company_share = bcsub($user->company_share, $request->part, 2);
                 $user->save();
 
+                // Recharger le collaborateur avec la relation user pour calculer le wallet
+                $collaborator->load('user');
+                
+                // Forcer le calcul du wallet en accédant à l'accesseur
+                $collaborator->wallet = $collaborator->wallet;
+
                 return response()->json([
                     'success' => true,
                     'message' => 'Collaborator created',
@@ -121,6 +127,7 @@ class CollaboratorController extends Controller
         try {
             $collaborator = Collaborator::where('id', $id)
                 ->where('user_id', Auth::id())
+                ->with('user')
                 ->first();
 
             if (!$collaborator) {
@@ -129,6 +136,9 @@ class CollaboratorController extends Controller
                     'message' => 'Collaborateur non trouvé'
                 ], 404);
             }
+
+            // Forcer le calcul du wallet en accédant à l'accesseur
+            $collaborator->wallet = $collaborator->wallet;
 
             return response()->json([
                 'success' => true,
@@ -197,6 +207,12 @@ class CollaboratorController extends Controller
                 $collaborator->update($request->only([
                     'name', 'phone', 'image'
                 ]));
+
+                // Recharger le collaborateur avec la relation user pour calculer le wallet
+                $collaborator->load('user');
+                
+                // Forcer le calcul du wallet en accédant à l'accesseur
+                $collaborator->wallet = $collaborator->wallet;
 
                 return response()->json([
                     'success' => true,

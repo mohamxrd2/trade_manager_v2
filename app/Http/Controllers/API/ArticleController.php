@@ -21,6 +21,11 @@ class ArticleController extends Controller
                 ->withSum(['transactions' => function ($query) {
                     $query->where('type', 'sale');
                 }], 'quantity')
+                ->with(['variations' => function ($query) {
+                    // Charger les variations avec leur quantité vendue
+                    $query->withSum('transactions', 'quantity');
+                }])
+                ->with('user.settings') // Charger les settings pour le calcul de low_stock
                 ->orderBy('created_at', 'desc')
                 ->get();
 
@@ -84,6 +89,9 @@ class ArticleController extends Controller
                 'image' => $request->image,
             ]);
 
+            // Charger les relations nécessaires pour les accessors
+            $article->load('user.settings');
+
             return response()->json([
                 'success' => true,
                 'message' => 'Article créé avec succès',
@@ -109,6 +117,10 @@ class ArticleController extends Controller
                 ->withSum(['transactions' => function ($query) {
                     $query->where('type', 'sale');
                 }], 'quantity')
+                ->with('user.settings') // Charger les settings pour le calcul de low_stock
+                ->with(['variations' => function ($query) {
+                    $query->withSum('transactions', 'quantity');
+                }])
                 ->first();
 
             if (!$article) {
@@ -140,6 +152,7 @@ class ArticleController extends Controller
         try {
             $article = Article::where('id', $id)
                 ->where('user_id', Auth::id())
+                ->with('user.settings') // Charger les settings pour le calcul de low_stock
                 ->first();
 
             if (!$article) {
@@ -192,6 +205,16 @@ class ArticleController extends Controller
                 'image' => $request->image,
             ]);
 
+            // Charger les relations nécessaires pour les accessors
+            $article->load('user.settings');
+            
+            // Charger les variations si l'article est de type variable
+            if ($article->type === 'variable') {
+                $article->load(['variations' => function ($query) {
+                    $query->withSum('transactions', 'quantity');
+                }]);
+            }
+
             return response()->json([
                 'success' => true,
                 'message' => 'Article modifié avec succès',
@@ -214,6 +237,7 @@ class ArticleController extends Controller
         try {
             $article = Article::where('id', $id)
                 ->where('user_id', Auth::id())
+                ->with('user.settings') // Charger les settings pour le calcul de low_stock
                 ->first();
 
             if (!$article) {

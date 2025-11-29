@@ -26,7 +26,8 @@ class VariationController extends Controller
             ->with([
                 'article' => function ($query) {
                     $query->withSum('transactions', 'quantity')
-                          ->select('id', 'name', 'type', 'sale_price', 'quantity', 'image');
+                          ->with('user.settings') // Charger les settings pour le calcul de low_stock
+                          ->select('id', 'name', 'type', 'sale_price', 'quantity', 'image', 'user_id');
                 }
             ])
             ->orderBy('created_at', 'desc')
@@ -59,7 +60,8 @@ class VariationController extends Controller
             ->with([
                 'article' => function ($query) {
                     $query->withSum('transactions', 'quantity')
-                          ->select('id', 'name', 'type', 'sale_price', 'quantity', 'image');
+                          ->with('user.settings') // Charger les settings pour le calcul de low_stock
+                          ->select('id', 'name', 'type', 'sale_price', 'quantity', 'image', 'user_id');
                 }
             ])
             ->find($id);
@@ -178,6 +180,9 @@ class VariationController extends Controller
                 'image' => $request->image,
             ]);
 
+            // Charger les relations nécessaires pour les accessors
+            $variation->load('article.user.settings');
+
             return response()->json([
                 'success' => true,
                 'message' => 'Variation ajoutée avec succès',
@@ -274,6 +279,9 @@ class VariationController extends Controller
                 'quantity' => $request->quantity,
                 'image' => $request->image,
             ]);
+
+            // Charger les relations nécessaires pour les accessors
+            $variation->load('article.user.settings');
 
             return response()->json([
                 'success' => true,

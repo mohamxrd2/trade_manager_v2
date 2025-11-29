@@ -109,10 +109,22 @@ class Article extends Model
 
     /**
      * Get the low stock attribute.
+     * 
+     * Un article est considéré en stock faible si son sales_percentage est supérieur ou égal
+     * au seuil personnalisé défini dans les paramètres utilisateur (user_settings.low_stock_threshold).
+     * Par défaut, le seuil est de 80%.
      */
     public function getLowStockAttribute(): bool
     {
-        return $this->sales_percentage > 80;
+        // Récupérer le seuil personnalisé depuis les paramètres utilisateur
+        // Charger la relation user.settings si elle n'est pas déjà chargée
+        if (!$this->relationLoaded('user')) {
+            $this->load('user.settings');
+        }
+        
+        $lowStockThreshold = $this->user?->settings?->low_stock_threshold ?? 80;
+        
+        return $this->sales_percentage >= $lowStockThreshold;
     }
 
     /**

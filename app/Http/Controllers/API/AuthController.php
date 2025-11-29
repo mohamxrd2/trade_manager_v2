@@ -114,6 +114,9 @@ class AuthController extends Controller
             return response()->json(['message' => 'Non authentifié'], 401);
         }
 
+        // Charger les relations nécessaires
+        $user->load(['company', 'settings']);
+
         // Retourner directement l'utilisateur (format simplifié)
         return response()->json($user);
     }

@@ -98,9 +98,21 @@ class Variation extends Model
 
     /**
      * Get the low stock attribute.
+     * 
+     * Une variation est considérée en stock faible si son sales_percentage est supérieur ou égal
+     * au seuil personnalisé défini dans les paramètres utilisateur (user_settings.low_stock_threshold).
+     * Par défaut, le seuil est de 80%.
      */
     public function getLowStockAttribute(): bool
     {
-        return $this->sales_percentage > 80;
+        // Récupérer le seuil personnalisé depuis les paramètres utilisateur
+        // Charger la relation article.user.settings si elle n'est pas déjà chargée
+        if (!$this->relationLoaded('article')) {
+            $this->load('article.user.settings');
+        }
+        
+        $lowStockThreshold = $this->article?->user?->settings?->low_stock_threshold ?? 80;
+        
+        return $this->sales_percentage >= $lowStockThreshold;
     }
 }

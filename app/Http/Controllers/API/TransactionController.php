@@ -254,11 +254,21 @@ class TransactionController extends Controller
                 ], 404);
             }
 
-            $validator = Validator::make($request->all(), [
+            // Validation conditionnelle selon le type de transaction
+            $validatorRules = [
                 'name' => 'required|string|max:255',
-                'quantity' => 'required_if:type,sale|nullable|integer|min:1',
-                'amount' => 'required_if:type,expense|nullable|numeric|min:0',
-            ]);
+            ];
+
+            if ($transaction->type === 'sale') {
+                // Pour une vente : on peut modifier sale_price OU quantity (ou les deux)
+                $validatorRules['sale_price'] = 'nullable|numeric|min:0';
+                $validatorRules['quantity'] = 'nullable|integer|min:1';
+            } else {
+                // Pour une dépense : on peut modifier name OU amount (ou les deux)
+                $validatorRules['amount'] = 'nullable|numeric|min:0';
+            }
+
+            $validator = Validator::make($request->all(), $validatorRules);
 
             if ($validator->fails()) {
                 return response()->json([
@@ -269,9 +279,6 @@ class TransactionController extends Controller
             }
 
             return DB::transaction(function () use ($request, $transaction) {
-                $oldQuantity = $transaction->quantity;
-                $newQuantity = $request->quantity;
-
                 if ($transaction->type === 'sale') {
                     $article = $transaction->article;
                     
@@ -282,43 +289,55 @@ class TransactionController extends Controller
                         ], 404);
                     }
 
-                    // Restaurer l'ancienne quantité
-                    $article->increment('quantity', $oldQuantity);
+                    $oldQuantity = $transaction->quantity;
+                    $newQuantity = $request->quantity ?? $transaction->quantity;
+                    $newSalePrice = $request->sale_price ?? $transaction->sale_price;
 
-                    // Calculer la quantité réellement disponible (stock - autres ventes)
-                    $otherSoldQuantity = $article->transactions()
-                        ->where('type', 'sale')
-                        ->where('id', '!=', $transaction->id)
-                        ->sum('quantity');
-                    
-                    $availableQuantity = $article->quantity - $otherSoldQuantity;
+                    // Si la quantité change, gérer le stock
+                    if ($newQuantity != $oldQuantity) {
+                        // Restaurer l'ancienne quantité
+                        $article->increment('quantity', $oldQuantity);
 
-                    // Vérifier que la nouvelle quantité est disponible
-                    if ($newQuantity > $availableQuantity) {
-                        return response()->json([
-                            'success' => false,
-                            'message' => 'Quantité insuffisante. Quantité disponible: ' . $availableQuantity
-                        ], 400);
+                        // Calculer la quantité réellement disponible (stock - autres ventes)
+                        $otherSoldQuantity = $article->transactions()
+                            ->where('type', 'sale')
+                            ->where('id', '!=', $transaction->id)
+                            ->sum('quantity');
+                        
+                        $availableQuantity = $article->quantity - $otherSoldQuantity;
+
+                        // Vérifier que la nouvelle quantité est disponible
+                        if ($newQuantity > $availableQuantity) {
+                            return response()->json([
+                                'success' => false,
+                                'message' => 'Quantité insuffisante. Quantité disponible: ' . $availableQuantity
+                            ], 400);
+                        }
+
+                        // Déduire la nouvelle quantité
+                        $article->decrement('quantity', $newQuantity);
                     }
 
-                    // Calculer le nouveau montant
-                    $newAmount = $article->sale_price * $newQuantity;
+                    // Calculer le nouveau montant : quantity * sale_price
+                    $newAmount = $newQuantity * $newSalePrice;
 
                     // Mettre à jour la transaction
                     $transaction->update([
                         'name' => $request->name,
                         'quantity' => $newQuantity,
+                        'sale_price' => $newSalePrice,
                         'amount' => $newAmount,
                     ]);
 
-                    // Déduire la nouvelle quantité
-                    $article->decrement('quantity', $newQuantity);
-
                 } else { // type === 'expense'
-                    $transaction->update([
-                        'name' => $request->name,
-                        'amount' => $request->amount,
-                    ]);
+                    // Pour une dépense, on peut modifier name et/ou amount
+                    $updateData = ['name' => $request->name];
+                    
+                    if ($request->has('amount')) {
+                        $updateData['amount'] = $request->amount;
+                    }
+                    
+                    $transaction->update($updateData);
                 }
 
                 return response()->json([
