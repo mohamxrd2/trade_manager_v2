@@ -5,6 +5,7 @@ namespace App\Http\Controllers\API;
 use App\Http\Controllers\Controller;
 use App\Models\Article;
 use App\Models\Transaction;
+use App\Services\NotificationService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
@@ -200,6 +201,16 @@ class TransactionController extends Controller
                     // Créer la transaction
                     $transaction = Transaction::create($transactionData);
 
+                    // Recharger l'article avec les relations nécessaires pour vérifier le stock faible
+                    $article->refresh();
+                    $article->load('user.settings');
+                    $article->loadSum(['transactions' => function ($q) {
+                        $q->where('type', 'sale');
+                    }], 'quantity');
+
+                    // Vérifier si l'article est passé en stock faible et créer une notification
+                    NotificationService::checkLowStock($article);
+
                     return response()->json([
                         'success' => true,
                         'message' => 'Vente enregistrée avec succès',
@@ -329,6 +340,16 @@ class TransactionController extends Controller
                         'amount' => $newAmount,
                     ]);
 
+                    // Recharger l'article pour avoir les données à jour
+                    $article->refresh();
+                    $article->load('user.settings');
+                    $article->loadSum(['transactions' => function ($q) {
+                        $q->where('type', 'sale');
+                    }], 'quantity');
+
+                    // Vérifier si l'article est passé en stock faible et créer une notification
+                    NotificationService::checkLowStock($article);
+
                 } else { // type === 'expense'
                     // Pour une dépense, on peut modifier name et/ou amount
                     $updateData = ['name' => $request->name];
@@ -395,6 +416,36 @@ class TransactionController extends Controller
             return response()->json([
                 'success' => false,
                 'message' => 'Erreur lors de la suppression de la transaction',
+                'error' => $e->getMessage()
+            ], 500);
+        }
+    }
+
+    /**
+     * Delete all transactions for the authenticated user
+     */
+    public function deleteAll(): JsonResponse
+    {
+        try {
+            $userId = Auth::id();
+
+            // Compter les transactions avant suppression
+            $count = Transaction::where('user_id', $userId)->count();
+
+            // Supprimer toutes les transactions de l'utilisateur
+            // Les transactions liées aux articles seront gérées par les événements du modèle
+            Transaction::where('user_id', $userId)->delete();
+
+            return response()->json([
+                'success' => true,
+                'message' => "{$count} transaction(s) supprimée(s) avec succès",
+                'count' => $count
+            ], 200);
+
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Erreur lors de la suppression des transactions',
                 'error' => $e->getMessage()
             ], 500);
         }

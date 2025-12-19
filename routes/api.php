@@ -4,6 +4,7 @@ use App\Http\Controllers\API\AnalyticsController;
 use App\Http\Controllers\API\ArticleController;
 use App\Http\Controllers\API\AuthController;
 use App\Http\Controllers\API\CollaboratorController;
+use App\Http\Controllers\API\NotificationController;
 use App\Http\Controllers\API\OnboardingController;
 use App\Http\Controllers\API\SocialAuthController;
 use App\Http\Controllers\API\TransactionController;
@@ -63,6 +64,7 @@ Route::middleware('auth:sanctum')->group(function () {
     
     // Articles routes
     Route::apiResource('articles', ArticleController::class);
+    Route::delete('/articles/all', [ArticleController::class, 'deleteAll']);
     
     // Variations routes
     Route::get('/variations', [VariationController::class, 'index']);
@@ -77,6 +79,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/transactions', [TransactionController::class, 'store']);
     Route::put('/transactions/{id}', [TransactionController::class, 'update']);
     Route::delete('/transactions/{id}', [TransactionController::class, 'destroy']);
+    Route::delete('/transactions/all', [TransactionController::class, 'deleteAll']);
     
     // Collaborators routes
     Route::get('/collaborators', [CollaboratorController::class, 'index']);
@@ -96,6 +99,13 @@ Route::middleware('auth:sanctum')->group(function () {
     // User settings routes
     Route::get('/user/settings', [UserSettingController::class, 'index']);
     Route::put('/user/settings', [UserSettingController::class, 'update']);
+    
+    // Notifications routes
+    Route::get('/notifications', [NotificationController::class, 'index']);
+    Route::get('/notifications/unread-count', [NotificationController::class, 'unreadCount']);
+    Route::put('/notifications/{id}/read', [NotificationController::class, 'markAsRead']);
+    Route::put('/notifications/read-all', [NotificationController::class, 'markAllAsRead']);
+    Route::delete('/notifications/{id}', [NotificationController::class, 'destroy']);
     
     // Analytics routes
     Route::get('/analytics/overview', [AnalyticsController::class, 'overview']);

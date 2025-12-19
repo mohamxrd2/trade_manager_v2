@@ -114,6 +114,14 @@ class User extends Authenticatable
     }
 
     /**
+     * Get the notifications for the user.
+     */
+    public function notifications(): HasMany
+    {
+        return $this->hasMany(Notification::class);
+    }
+
+    /**
      * Get the total articles attribute.
      */
     public function getTotalArticlesAttribute(): int

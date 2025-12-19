@@ -261,4 +261,34 @@ class ArticleController extends Controller
             ], 500);
         }
     }
+
+    /**
+     * Delete all articles for the authenticated user
+     */
+    public function deleteAll(): JsonResponse
+    {
+        try {
+            $userId = Auth::id();
+
+            // Compter les articles avant suppression
+            $count = Article::where('user_id', $userId)->count();
+
+            // Supprimer tous les articles de l'utilisateur
+            // Les variations et transactions liées seront gérées par les contraintes de clé étrangère
+            Article::where('user_id', $userId)->delete();
+
+            return response()->json([
+                'success' => true,
+                'message' => "{$count} produit(s) supprimé(s) avec succès",
+                'count' => $count
+            ], 200);
+
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Erreur lors de la suppression des produits',
+                'error' => $e->getMessage()
+            ], 500);
+        }
+    }
 }
