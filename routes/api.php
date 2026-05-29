@@ -3,7 +3,10 @@
 use App\Http\Controllers\API\AnalyticsController;
 use App\Http\Controllers\API\ArticleController;
 use App\Http\Controllers\API\AuthController;
+use App\Http\Controllers\API\ClientController;
 use App\Http\Controllers\API\CollaboratorController;
+use App\Http\Controllers\API\CompanyController;
+use App\Http\Controllers\API\InvoiceController;
 use App\Http\Controllers\API\NotificationController;
 use App\Http\Controllers\API\OnboardingController;
 use App\Http\Controllers\API\SocialAuthController;
@@ -32,6 +35,30 @@ use Illuminate\Support\Facades\Route;
 Route::post('/register', [AuthController::class, 'register']);
 Route::post('/login', [AuthController::class, 'login']);
 
+// Health check route - Pour vérifier que le serveur est actif
+Route::get('/health', function () {
+    $dbConnected = false;
+    $dbError = null;
+    
+    try {
+        DB::connection()->getPdo();
+        $dbConnected = true;
+    } catch (\Exception $e) {
+        $dbError = $e->getMessage();
+    }
+    
+    return response()->json([
+        'success' => true,
+        'status' => 'ok',
+        'timestamp' => now()->toIso8601String(),
+        'services' => [
+            'api' => true,
+            'database' => $dbConnected,
+        ],
+        'database_error' => $dbError,
+    ]);
+});
+
 // Database connection test route
 Route::get('/test-db', function () {
     try {
@@ -53,6 +80,40 @@ Route::get('/test-db', function () {
     }
 });
 
+// CORS test route - Permet de vérifier que CORS fonctionne correctement
+Route::get('/test-cors', function (Request $request) {
+    return response()->json([
+        'success' => true,
+        'message' => '✅ CORS fonctionne correctement!',
+        'origin' => $request->header('Origin', 'N/A'),
+        'method' => $request->method(),
+        'headers' => [
+            'received' => [
+                'origin' => $request->header('Origin'),
+                'content-type' => $request->header('Content-Type'),
+                'authorization' => $request->header('Authorization') ? 'Present' : 'Not present',
+            ],
+        ],
+        'cors_config' => [
+            'allowed_origins' => config('cors.allowed_origins'),
+            'supports_credentials' => config('cors.supports_credentials'),
+        ],
+        'timestamp' => now()->toIso8601String(),
+    ]);
+});
+
+// CORS test route avec POST pour tester les requêtes avec body
+Route::post('/test-cors', function (Request $request) {
+    return response()->json([
+        'success' => true,
+        'message' => '✅ CORS POST fonctionne correctement!',
+        'origin' => $request->header('Origin', 'N/A'),
+        'method' => $request->method(),
+        'body_received' => $request->all(),
+        'timestamp' => now()->toIso8601String(),
+    ]);
+});
+
 // Social authentication routes
 Route::get('/auth/{provider}/redirect', [SocialAuthController::class, 'redirectToProvider']);
 Route::get('/auth/{provider}/callback', [SocialAuthController::class, 'handleProviderCallback']);
@@ -65,6 +126,10 @@ Route::middleware('auth:sanctum')->group(function () {
     // Articles routes
     Route::apiResource('articles', ArticleController::class);
     Route::delete('/articles/all', [ArticleController::class, 'deleteAll']);
+    
+    // Stock replenishment routes
+    Route::post('/articles/{id}/add-stock', [ArticleController::class, 'addStock']);
+    Route::get('/articles/{id}/stock-history', [ArticleController::class, 'stockHistory']);
     
     // Variations routes
     Route::get('/variations', [VariationController::class, 'index']);
@@ -92,9 +157,23 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::put('/user/profile', [UserProfileController::class, 'updateProfile']);
     Route::put('/user/password', [UserProfileController::class, 'updatePassword']);
     
-    // Onboarding routes
+    // Onboarding routes (legacy)
     Route::get('/onboarding/check', [OnboardingController::class, 'check']);
     Route::post('/onboarding/complete', [OnboardingController::class, 'complete']);
+    
+    // =========================================================================
+    // COMPANY / ENTREPRISE
+    // =========================================================================
+    
+    // Company onboarding routes
+    Route::get('/company/onboarding-status', [CompanyController::class, 'onboardingStatus']);
+    Route::post('/company/complete-onboarding', [CompanyController::class, 'completeOnboarding']);
+    
+    // Company management routes
+    Route::get('/company', [CompanyController::class, 'show']);
+    Route::put('/company', [CompanyController::class, 'update']);
+    Route::post('/company/logo', [CompanyController::class, 'uploadLogo']);
+    Route::delete('/company/logo', [CompanyController::class, 'deleteLogo']);
     
     // User settings routes
     Route::get('/user/settings', [UserSettingController::class, 'index']);
@@ -115,4 +194,31 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/analytics/kpis', [AnalyticsController::class, 'kpis']);
     Route::get('/analytics/transactions', [AnalyticsController::class, 'transactions']);
     Route::get('/analytics/predictions', [AnalyticsController::class, 'predictions']);
+    
+    // =========================================================================
+    // CLIENTS & FACTURATION
+    // =========================================================================
+    
+    // Clients routes (CRUD)
+    Route::get('/clients/dropdown', [ClientController::class, 'dropdown']);
+    Route::apiResource('clients', ClientController::class);
+    
+    // Invoices routes (protégées par le middleware company.ready)
+    Route::middleware('company.ready')->group(function () {
+        // Dashboard facturation
+        Route::get('/invoices/dashboard', [InvoiceController::class, 'dashboard']);
+        
+        // Thèmes disponibles
+        Route::get('/invoices/themes', [InvoiceController::class, 'themes']);
+        
+        // CRUD Factures
+        Route::get('/invoices', [InvoiceController::class, 'index']);
+        Route::post('/invoices', [InvoiceController::class, 'store']);
+        Route::get('/invoices/{id}', [InvoiceController::class, 'show']);
+        Route::delete('/invoices/{id}', [InvoiceController::class, 'destroy']);
+        
+        // Actions spéciales
+        Route::patch('/invoices/{id}/status', [InvoiceController::class, 'updateStatus']);
+        Route::post('/invoices/{id}/duplicate', [InvoiceController::class, 'duplicate']);
+    });
 });

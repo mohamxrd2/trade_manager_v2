@@ -74,6 +74,14 @@ class Article extends Model
     }
 
     /**
+     * Get the stock replenishments history for the article.
+     */
+    public function stockReplenishments(): HasMany
+    {
+        return $this->hasMany(StockReplenishment::class);
+    }
+
+    /**
      * Get the sold quantity attribute.
      */
     public function getSoldQuantityAttribute(): int

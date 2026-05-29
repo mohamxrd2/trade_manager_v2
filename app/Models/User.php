@@ -122,6 +122,30 @@ class User extends Authenticatable
     }
 
     /**
+     * Get the stock replenishments made by the user.
+     */
+    public function stockReplenishments(): HasMany
+    {
+        return $this->hasMany(StockReplenishment::class);
+    }
+
+    /**
+     * Get the clients for the user.
+     */
+    public function clients(): HasMany
+    {
+        return $this->hasMany(Client::class);
+    }
+
+    /**
+     * Get the invoices for the user.
+     */
+    public function invoices(): HasMany
+    {
+        return $this->hasMany(Invoice::class);
+    }
+
+    /**
      * Get the total articles attribute.
      */
     public function getTotalArticlesAttribute(): int

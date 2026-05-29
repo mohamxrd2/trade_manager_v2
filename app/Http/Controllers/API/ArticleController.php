@@ -4,9 +4,11 @@ namespace App\Http\Controllers\API;
 
 use App\Http\Controllers\Controller;
 use App\Models\Article;
+use App\Models\StockReplenishment;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Validator;
 
 class ArticleController extends Controller
@@ -287,6 +289,158 @@ class ArticleController extends Controller
             return response()->json([
                 'success' => false,
                 'message' => 'Erreur lors de la suppression des produits',
+                'error' => $e->getMessage()
+            ], 500);
+        }
+    }
+
+    /**
+     * Add stock to an article (replenishment).
+     * 
+     * POST /api/articles/{id}/add-stock
+     * Body: { "quantity": 20, "note": "Réapprovisionnement fournisseur" }
+     */
+    public function addStock(Request $request, string $id): JsonResponse
+    {
+        try {
+            // Validation
+            $validator = Validator::make($request->all(), [
+                'quantity' => 'required|integer|min:1',
+                'note' => 'nullable|string|max:500',
+            ], [
+                'quantity.required' => 'La quantité à ajouter est obligatoire',
+                'quantity.integer' => 'La quantité doit être un nombre entier',
+                'quantity.min' => 'La quantité doit être au minimum de 1',
+                'note.string' => 'La note doit être une chaîne de caractères',
+                'note.max' => 'La note ne peut pas dépasser 500 caractères',
+            ]);
+
+            if ($validator->fails()) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Erreur de validation',
+                    'errors' => $validator->errors()
+                ], 422);
+            }
+
+            // Récupérer l'article appartenant à l'utilisateur connecté
+            $article = Article::where('id', $id)
+                ->where('user_id', Auth::id())
+                ->first();
+
+            if (!$article) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Article non trouvé'
+                ], 404);
+            }
+
+            $quantityToAdd = (int) $request->quantity;
+
+            // Utiliser une transaction DB pour garantir l'intégrité
+            DB::transaction(function () use ($article, $quantityToAdd, $request) {
+                // 1. Incrémenter la quantité de l'article
+                $article->increment('quantity', $quantityToAdd);
+
+                // 2. Créer l'entrée dans l'historique des réapprovisionnements
+                StockReplenishment::create([
+                    'user_id' => Auth::id(),
+                    'article_id' => $article->id,
+                    'quantity_added' => $quantityToAdd,
+                    'note' => $request->note,
+                ]);
+            });
+
+            // Recharger l'article avec les relations pour la réponse
+            $article->refresh();
+            $article->load('user.settings');
+            
+            if ($article->type === 'variable') {
+                $article->load(['variations' => function ($query) {
+                    $query->withSum('transactions', 'quantity');
+                }]);
+            }
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Stock ajouté avec succès',
+                'data' => [
+                    'article' => $article,
+                    'added_quantity' => $quantityToAdd,
+                    'new_quantity' => $article->quantity,
+                ]
+            ], 200);
+
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Erreur lors de l\'ajout du stock',
+                'error' => $e->getMessage()
+            ], 500);
+        }
+    }
+
+    /**
+     * Get stock replenishment history for an article.
+     * 
+     * GET /api/articles/{id}/stock-history
+     * Query params: per_page (default: 20), page (default: 1)
+     */
+    public function stockHistory(Request $request, string $id): JsonResponse
+    {
+        try {
+            // Vérifier que l'article existe et appartient à l'utilisateur
+            $article = Article::where('id', $id)
+                ->where('user_id', Auth::id())
+                ->first();
+
+            if (!$article) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Article non trouvé'
+                ], 404);
+            }
+
+            $perPage = $request->get('per_page', 20);
+            $page = $request->get('page', 1);
+
+            // Récupérer l'historique des réapprovisionnements
+            $history = StockReplenishment::where('article_id', $id)
+                ->with('user:id,first_name,last_name,username')
+                ->orderBy('created_at', 'desc')
+                ->paginate($perPage, ['*'], 'page', $page);
+
+            // Calculer le total des réapprovisionnements
+            $totalReplenished = StockReplenishment::where('article_id', $id)
+                ->sum('quantity_added');
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Historique des réapprovisionnements récupéré avec succès',
+                'data' => [
+                    'article' => [
+                        'id' => $article->id,
+                        'name' => $article->name,
+                        'current_quantity' => $article->quantity,
+                    ],
+                    'history' => $history->items(),
+                    'summary' => [
+                        'total_replenished' => (int) $totalReplenished,
+                        'replenishment_count' => $history->total(),
+                    ],
+                    'pagination' => [
+                        'current_page' => $history->currentPage(),
+                        'per_page' => $history->perPage(),
+                        'total' => $history->total(),
+                        'last_page' => $history->lastPage(),
+                    ],
+                ]
+            ], 200);
+
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Erreur lors de la récupération de l\'historique',
                 'error' => $e->getMessage()
             ], 500);
         }

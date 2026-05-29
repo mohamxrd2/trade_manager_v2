@@ -96,6 +96,16 @@ return [
             'prefix_indexes' => true,
             'search_path' => 'public',
             'sslmode' => 'prefer',
+            // Options de connexion optimisées pour éviter les timeouts
+            'options' => [
+                PDO::ATTR_TIMEOUT => (int) env('DB_TIMEOUT', 5), // Timeout de connexion en secondes
+                PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
+                PDO::ATTR_PERSISTENT => (bool) env('DB_PERSISTENT', true), // Connexion persistante
+            ],
+            // Configuration du retry automatique
+            'retry_on_timeout' => (bool) env('DB_RETRY_ON_TIMEOUT', true),
+            'retry_attempts' => (int) env('DB_RETRY_ATTEMPTS', 3),
+            'retry_delay' => (int) env('DB_RETRY_DELAY', 100), // Délai entre les tentatives en ms
         ],
 
         'sqlsrv' => [
