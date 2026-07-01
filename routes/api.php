@@ -59,60 +59,64 @@ Route::get('/health', function () {
     ]);
 });
 
-// Database connection test route
-Route::get('/test-db', function () {
-    try {
-        DB::connection()->getPdo();
+// Debug routes (test-db, test-cors) - Uniquement disponibles hors production
+// pour éviter d'exposer des informations internes (driver DB, config CORS, etc.)
+if (!app()->environment('production')) {
+    // Database connection test route
+    Route::get('/test-db', function () {
+        try {
+            DB::connection()->getPdo();
+            return response()->json([
+                'success' => true,
+                'message' => '✅ Connexion à la base de données réussie!',
+                'database' => DB::connection()->getDatabaseName(),
+                'driver' => DB::connection()->getDriverName(),
+                'status' => 'connected'
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => '❌ Erreur de connexion à la base de données',
+                'error' => $e->getMessage(),
+                'status' => 'disconnected'
+            ], 500);
+        }
+    });
+
+    // CORS test route - Permet de vérifier que CORS fonctionne correctement
+    Route::get('/test-cors', function (Request $request) {
         return response()->json([
             'success' => true,
-            'message' => '✅ Connexion à la base de données réussie!',
-            'database' => DB::connection()->getDatabaseName(),
-            'driver' => DB::connection()->getDriverName(),
-            'status' => 'connected'
-        ]);
-    } catch (\Exception $e) {
-        return response()->json([
-            'success' => false,
-            'message' => '❌ Erreur de connexion à la base de données',
-            'error' => $e->getMessage(),
-            'status' => 'disconnected'
-        ], 500);
-    }
-});
-
-// CORS test route - Permet de vérifier que CORS fonctionne correctement
-Route::get('/test-cors', function (Request $request) {
-    return response()->json([
-        'success' => true,
-        'message' => '✅ CORS fonctionne correctement!',
-        'origin' => $request->header('Origin', 'N/A'),
-        'method' => $request->method(),
-        'headers' => [
-            'received' => [
-                'origin' => $request->header('Origin'),
-                'content-type' => $request->header('Content-Type'),
-                'authorization' => $request->header('Authorization') ? 'Present' : 'Not present',
+            'message' => '✅ CORS fonctionne correctement!',
+            'origin' => $request->header('Origin', 'N/A'),
+            'method' => $request->method(),
+            'headers' => [
+                'received' => [
+                    'origin' => $request->header('Origin'),
+                    'content-type' => $request->header('Content-Type'),
+                    'authorization' => $request->header('Authorization') ? 'Present' : 'Not present',
+                ],
             ],
-        ],
-        'cors_config' => [
-            'allowed_origins' => config('cors.allowed_origins'),
-            'supports_credentials' => config('cors.supports_credentials'),
-        ],
-        'timestamp' => now()->toIso8601String(),
-    ]);
-});
+            'cors_config' => [
+                'allowed_origins' => config('cors.allowed_origins'),
+                'supports_credentials' => config('cors.supports_credentials'),
+            ],
+            'timestamp' => now()->toIso8601String(),
+        ]);
+    });
 
-// CORS test route avec POST pour tester les requêtes avec body
-Route::post('/test-cors', function (Request $request) {
-    return response()->json([
-        'success' => true,
-        'message' => '✅ CORS POST fonctionne correctement!',
-        'origin' => $request->header('Origin', 'N/A'),
-        'method' => $request->method(),
-        'body_received' => $request->all(),
-        'timestamp' => now()->toIso8601String(),
-    ]);
-});
+    // CORS test route avec POST pour tester les requêtes avec body
+    Route::post('/test-cors', function (Request $request) {
+        return response()->json([
+            'success' => true,
+            'message' => '✅ CORS POST fonctionne correctement!',
+            'origin' => $request->header('Origin', 'N/A'),
+            'method' => $request->method(),
+            'body_received' => $request->all(),
+            'timestamp' => now()->toIso8601String(),
+        ]);
+    });
+}
 
 // Social authentication routes
 Route::get('/auth/{provider}/redirect', [SocialAuthController::class, 'redirectToProvider']);
