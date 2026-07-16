@@ -20,6 +20,7 @@ class Transaction extends Model
         'user_id',
         'article_id',
         'variable_id',
+        'invoice_id',
         'name',
         'quantity',
         'amount',
@@ -96,6 +97,14 @@ class Transaction extends Model
     public function variation(): BelongsTo
     {
         return $this->belongsTo(Variation::class, 'variable_id');
+    }
+
+    /**
+     * Get the invoice that generated this transaction, if any.
+     */
+    public function invoice(): BelongsTo
+    {
+        return $this->belongsTo(Invoice::class);
     }
 
     /**

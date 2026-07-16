@@ -32,7 +32,9 @@ use Illuminate\Support\Facades\Route;
 // Public routes (no authentication required)
 // Note: La route /sanctum/csrf-cookie est gérée automatiquement par Sanctum
 
-Route::post('/register', [AuthController::class, 'register']);
+Route::post('/register', [AuthController::class, 'register'])->middleware('throttle:6,1');
+Route::post('/register/verify', [AuthController::class, 'verifyRegistration'])->middleware('throttle:10,1');
+Route::post('/register/resend-code', [AuthController::class, 'resendRegistrationCode'])->middleware('throttle:3,1');
 Route::post('/login', [AuthController::class, 'login']);
 
 // Health check route - Pour vérifier que le serveur est actif
@@ -121,6 +123,8 @@ if (!app()->environment('production')) {
 // Social authentication routes
 Route::get('/auth/{provider}/redirect', [SocialAuthController::class, 'redirectToProvider']);
 Route::get('/auth/{provider}/callback', [SocialAuthController::class, 'handleProviderCallback']);
+// Utilisée quand la redirect URI du provider pointe vers le frontend, qui nous relaie le code
+Route::post('/auth/{provider}/exchange', [SocialAuthController::class, 'exchangeCode']);
 
 // Protected routes (authentication required)
 Route::middleware('auth:sanctum')->group(function () {
@@ -224,5 +228,9 @@ Route::middleware('auth:sanctum')->group(function () {
         // Actions spéciales
         Route::patch('/invoices/{id}/status', [InvoiceController::class, 'updateStatus']);
         Route::post('/invoices/{id}/duplicate', [InvoiceController::class, 'duplicate']);
+
+        // PDF : aperçu (affichage inline) et téléchargement (forcé)
+        Route::get('/invoices/{id}/preview', [InvoiceController::class, 'preview']);
+        Route::get('/invoices/{id}/download', [InvoiceController::class, 'download']);
     });
 });
