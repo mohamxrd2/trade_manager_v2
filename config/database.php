@@ -95,7 +95,9 @@ return [
             'prefix' => '',
             'prefix_indexes' => true,
             'search_path' => 'public',
-            'sslmode' => 'prefer',
+            // 'require' par défaut (Neon impose TLS) ; surchageable en local
+            // via DB_SSLMODE si votre Postgres local n'a pas SSL configuré.
+            'sslmode' => env('DB_SSLMODE', 'require'),
             // Options de connexion optimisées pour éviter les timeouts
             'options' => [
                 PDO::ATTR_TIMEOUT => (int) env('DB_TIMEOUT', 5), // Timeout de connexion en secondes

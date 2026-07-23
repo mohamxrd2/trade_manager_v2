@@ -6,6 +6,7 @@ use App\Http\Controllers\API\AuthController;
 use App\Http\Controllers\API\ClientController;
 use App\Http\Controllers\API\CollaboratorController;
 use App\Http\Controllers\API\CompanyController;
+use App\Http\Controllers\API\HealthController;
 use App\Http\Controllers\API\InvoiceController;
 use App\Http\Controllers\API\NotificationController;
 use App\Http\Controllers\API\OnboardingController;
@@ -14,8 +15,6 @@ use App\Http\Controllers\API\TransactionController;
 use App\Http\Controllers\API\UserProfileController;
 use App\Http\Controllers\API\UserSettingController;
 use App\Http\Controllers\API\VariationController;
-use Illuminate\Http\Request;
-use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Route;
 
 /*
@@ -38,86 +37,14 @@ Route::post('/register/resend-code', [AuthController::class, 'resendRegistration
 Route::post('/login', [AuthController::class, 'login']);
 
 // Health check route - Pour vérifier que le serveur est actif
-Route::get('/health', function () {
-    $dbConnected = false;
-    $dbError = null;
-    
-    try {
-        DB::connection()->getPdo();
-        $dbConnected = true;
-    } catch (\Exception $e) {
-        $dbError = $e->getMessage();
-    }
-    
-    return response()->json([
-        'success' => true,
-        'status' => 'ok',
-        'timestamp' => now()->toIso8601String(),
-        'services' => [
-            'api' => true,
-            'database' => $dbConnected,
-        ],
-        'database_error' => $dbError,
-    ]);
-});
+Route::get('/health', [HealthController::class, 'check']);
 
 // Debug routes (test-db, test-cors) - Uniquement disponibles hors production
 // pour éviter d'exposer des informations internes (driver DB, config CORS, etc.)
 if (!app()->environment('production')) {
-    // Database connection test route
-    Route::get('/test-db', function () {
-        try {
-            DB::connection()->getPdo();
-            return response()->json([
-                'success' => true,
-                'message' => '✅ Connexion à la base de données réussie!',
-                'database' => DB::connection()->getDatabaseName(),
-                'driver' => DB::connection()->getDriverName(),
-                'status' => 'connected'
-            ]);
-        } catch (\Exception $e) {
-            return response()->json([
-                'success' => false,
-                'message' => '❌ Erreur de connexion à la base de données',
-                'error' => $e->getMessage(),
-                'status' => 'disconnected'
-            ], 500);
-        }
-    });
-
-    // CORS test route - Permet de vérifier que CORS fonctionne correctement
-    Route::get('/test-cors', function (Request $request) {
-        return response()->json([
-            'success' => true,
-            'message' => '✅ CORS fonctionne correctement!',
-            'origin' => $request->header('Origin', 'N/A'),
-            'method' => $request->method(),
-            'headers' => [
-                'received' => [
-                    'origin' => $request->header('Origin'),
-                    'content-type' => $request->header('Content-Type'),
-                    'authorization' => $request->header('Authorization') ? 'Present' : 'Not present',
-                ],
-            ],
-            'cors_config' => [
-                'allowed_origins' => config('cors.allowed_origins'),
-                'supports_credentials' => config('cors.supports_credentials'),
-            ],
-            'timestamp' => now()->toIso8601String(),
-        ]);
-    });
-
-    // CORS test route avec POST pour tester les requêtes avec body
-    Route::post('/test-cors', function (Request $request) {
-        return response()->json([
-            'success' => true,
-            'message' => '✅ CORS POST fonctionne correctement!',
-            'origin' => $request->header('Origin', 'N/A'),
-            'method' => $request->method(),
-            'body_received' => $request->all(),
-            'timestamp' => now()->toIso8601String(),
-        ]);
-    });
+    Route::get('/test-db', [HealthController::class, 'testDb']);
+    Route::get('/test-cors', [HealthController::class, 'testCors']);
+    Route::post('/test-cors', [HealthController::class, 'testCorsPost']);
 }
 
 // Social authentication routes

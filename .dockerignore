@@ -1,0 +1,31 @@
+.git
+.gitignore
+vendor
+node_modules
+storage/logs
+storage/framework/cache
+storage/framework/sessions
+storage/framework/views
+.env
+.env.*
+docker-compose.yml
+docker-data
+README.md
+
+# Divers / IDE
+.DS_Store
+.idea
+.vscode
+*.log
+
+# Tests (pestphp/mockery ne sont pas installés en prod via --no-dev,
+# les inclure dans l'image ne servirait à rien)
+tests
+phpunit.xml
+
+# Fichiers Docker eux-mêmes (inutiles dans l'image)
+Dockerfile
+.dockerignore
+
+# Historique de conversation / outillage local
+.claude
