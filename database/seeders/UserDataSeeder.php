@@ -8,22 +8,36 @@ use App\Models\User;
 use App\Models\Variation;
 use Illuminate\Database\Seeder;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Str;
 
 class UserDataSeeder extends Seeder
 {
     /**
      * Run the database seeds.
+     *
+     * Identifiants pilotés par DEFAULT_ADMIN_EMAIL / DEFAULT_ADMIN_PASSWORD
+     * (voir .env.example) — jamais de credential en dur dans ce fichier
+     * versionné. Si DEFAULT_ADMIN_PASSWORD est absent, un mot de passe
+     * aléatoire est généré et affiché en console pour cette exécution.
      */
     public function run(): void
     {
+        $email = env('DEFAULT_ADMIN_EMAIL', 'admin@waelly.test');
+        $password = env('DEFAULT_ADMIN_PASSWORD');
+
+        if (!$password) {
+            $password = Str::random(16);
+            $this->command->warn("⚠️ DEFAULT_ADMIN_PASSWORD non défini — mot de passe généré : {$password}");
+        }
+
         // Créer ou récupérer l'utilisateur
         $user = User::firstOrCreate(
-            ['email' => 'zoranstro@gmail.com'],
+            ['email' => $email],
             [
                 'first_name' => 'Zoran',
                 'last_name' => 'Stro',
                 'username' => 'zoranstro',
-                'password' => Hash::make('Mohamed10@'),
+                'password' => Hash::make($password),
                 'company_share' => 100.00,
             ]
         );
