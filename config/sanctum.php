@@ -13,11 +13,16 @@ return [
     | authentication cookies. Typically, these should include your local
     | and production domains which access your API via a frontend SPA.
     |
+    | Le défaut ci-dessous ne couvre que le développement local. En
+    | production, SANCTUM_STATEFUL_DOMAINS doit être défini explicitement
+    | dans les variables d'environnement Render (ex: votre-domaine.com,api.votre-domaine.com)
+    | — aucun domaine de production n'est codé en dur ici.
+    |
     */
 
     'stateful' => explode(',', env(
         'SANCTUM_STATEFUL_DOMAINS',
-        'localhost,localhost:3000,localhost:8000,127.0.0.1,127.0.0.1:3000,127.0.0.1:8000,mon-domaine-front.com,www.mon-domaine-front.com'
+        'localhost,localhost:3000,localhost:8000,127.0.0.1,127.0.0.1:3000,127.0.0.1:8000'
     )),
 
     /*

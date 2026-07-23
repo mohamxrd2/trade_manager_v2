@@ -47,16 +47,18 @@ return [
     |--------------------------------------------------------------------------
     | Origines autorisées
     |--------------------------------------------------------------------------
-    | Liste des domaines autorisés à faire des requêtes cross-origin.
+    | Aucun domaine codé en dur : FRONTEND_URL pilote l'origine principale
+    | (http://localhost:3000 en local, https://votre-domaine.com en prod — définis
+    | uniquement dans .env local ou les variables d'environnement Render).
+    | ADDITIONAL_CORS_ORIGINS (optionnel, liste séparée par des virgules)
+    | permet d'autoriser des origines supplémentaires sans toucher au code
+    | (ex: variante "www.").
     | ⚠️ En production, NE JAMAIS utiliser '*' avec supports_credentials=true
     */
-    'allowed_origins' => array_filter([
-        'http://localhost:3000',                    // Développement local Next.js
-        'http://127.0.0.1:3000',                    // Alternative localhost
-        env('FRONTEND_URL'),                        // URL frontend depuis .env
-        'https://mon-domaine-front.com',            // Production
-        'https://www.mon-domaine-front.com',        // Production avec www
-    ]),
+    'allowed_origins' => array_filter(array_merge(
+        [env('FRONTEND_URL')],
+        array_filter(explode(',', (string) env('ADDITIONAL_CORS_ORIGINS', '')))
+    )),
 
     /*
     |--------------------------------------------------------------------------

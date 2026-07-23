@@ -22,7 +22,7 @@ class UserDataSeeder extends Seeder
      */
     public function run(): void
     {
-        $email = env('DEFAULT_ADMIN_EMAIL', 'admin@waelly.test');
+        $email = env('DEFAULT_ADMIN_EMAIL', 'admin@example.test');
         $password = env('DEFAULT_ADMIN_PASSWORD');
 
         if (!$password) {
