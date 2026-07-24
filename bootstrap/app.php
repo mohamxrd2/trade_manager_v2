@@ -33,6 +33,8 @@ return Application::configure(basePath: dirname(__DIR__))
         // Alias pour les middlewares personnalisés
         $middleware->alias([
             'company.ready' => \App\Http\Middleware\EnsureCompanyInvoiceReady::class,
+            // TEMPORAIRE — diagnostic des 502 en prod, voir LogApiDiagnostics.
+            'diag.log' => \App\Http\Middleware\LogApiDiagnostics::class,
         ]);
     })
     ->withExceptions(function (Exceptions $exceptions): void {

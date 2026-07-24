@@ -40,8 +40,21 @@ class DatabaseConnectionMiddleware
      */
     public function handle(Request $request, Closure $next): Response
     {
+        // TEMPORAIRE — diagnostic des 502 en prod : ce middleware est LE
+        // point de blocage suspecté (retry_attempts x DB_TIMEOUT peut
+        // bloquer jusqu'à ~15s par requête sur un process mono-worker).
+        $start = microtime(true);
+
         // Vérifier la connexion DB avec retry automatique
-        if (!$this->checkDatabaseConnectionWithRetry()) {
+        $ok = $this->checkDatabaseConnectionWithRetry($request->path());
+
+        Log::info('[DIAG] DatabaseConnectionMiddleware terminé', [
+            'path' => $request->path(),
+            'db_check_ok' => $ok,
+            'duration_ms' => round((microtime(true) - $start) * 1000, 1),
+        ]);
+
+        if (!$ok) {
             return $this->databaseUnavailableResponse();
         }
 
@@ -51,19 +64,29 @@ class DatabaseConnectionMiddleware
     /**
      * Vérifie la connexion à la base de données avec retry automatique.
      */
-    protected function checkDatabaseConnectionWithRetry(): bool
+    protected function checkDatabaseConnectionWithRetry(string $path = ''): bool
     {
         $attempts = 0;
 
         while ($attempts < $this->maxRetries) {
+            $attemptStart = microtime(true);
             try {
                 // Tente une requête simple pour vérifier la connexion
                 DB::connection()->getPdo();
+
+                Log::info('[DIAG] DatabaseConnectionMiddleware: connexion OK', [
+                    'path' => $path,
+                    'attempt' => $attempts + 1,
+                    'attempt_duration_ms' => round((microtime(true) - $attemptStart) * 1000, 1),
+                ]);
+
                 return true;
             } catch (\PDOException $e) {
                 $attempts++;
-                
+
                 Log::warning("Tentative de connexion DB échouée ({$attempts}/{$this->maxRetries})", [
+                    'path' => $path,
+                    'attempt_duration_ms' => round((microtime(true) - $attemptStart) * 1000, 1),
                     'error' => $e->getMessage(),
                     'code' => $e->getCode(),
                 ]);
@@ -74,13 +97,17 @@ class DatabaseConnectionMiddleware
                 }
             } catch (\Exception $e) {
                 Log::error("Erreur inattendue lors de la connexion DB", [
+                    'path' => $path,
+                    'attempt_duration_ms' => round((microtime(true) - $attemptStart) * 1000, 1),
+                    'exception_class' => get_class($e),
                     'error' => $e->getMessage(),
+                    'trace' => $e->getTraceAsString(),
                 ]);
                 return false;
             }
         }
 
-        Log::error("Base de données indisponible après {$this->maxRetries} tentatives");
+        Log::error("Base de données indisponible après {$this->maxRetries} tentatives", ['path' => $path]);
         return false;
     }
 

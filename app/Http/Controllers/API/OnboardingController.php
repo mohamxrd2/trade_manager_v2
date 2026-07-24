@@ -8,6 +8,7 @@ use App\Models\UserSetting;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Validator;
 
 class OnboardingController extends Controller
@@ -107,6 +108,8 @@ class OnboardingController extends Controller
      */
     public function check(): JsonResponse
     {
+        Log::info('[DIAG] OnboardingController::check: entrée');
+
         try {
             $user = Auth::user();
 
@@ -123,6 +126,12 @@ class OnboardingController extends Controller
             $hasSettings = $user->settings !== null;
             $isComplete = $hasCompany && $hasSettings;
 
+            Log::info('[DIAG] OnboardingController::check: succès', [
+                'user_id' => $user->id,
+                'has_company' => $hasCompany,
+                'has_settings' => $hasSettings,
+            ]);
+
             return response()->json([
                 'success' => true,
                 'data' => [
@@ -134,7 +143,15 @@ class OnboardingController extends Controller
                 ]
             ], 200);
 
-        } catch (\Exception $e) {
+        } catch (\Throwable $e) {
+            Log::error('[DIAG] OnboardingController::check: exception', [
+                'exception_class' => get_class($e),
+                'message' => $e->getMessage(),
+                'file' => $e->getFile(),
+                'line' => $e->getLine(),
+                'trace' => $e->getTraceAsString(),
+            ]);
+
             return response()->json([
                 'success' => false,
                 'message' => 'Erreur lors de la vérification de l\'onboarding',

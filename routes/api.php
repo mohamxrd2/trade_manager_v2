@@ -54,7 +54,9 @@ Route::get('/auth/{provider}/callback', [SocialAuthController::class, 'handlePro
 Route::post('/auth/{provider}/exchange', [SocialAuthController::class, 'exchangeCode']);
 
 // Protected routes (authentication required)
-Route::middleware('auth:sanctum')->group(function () {
+// 'diag.log' est TEMPORAIRE — diagnostic des 502 en prod sur ces routes,
+// à retirer une fois la cause identifiée (voir app/Http/Middleware/LogApiDiagnostics.php)
+Route::middleware(['auth:sanctum', 'diag.log'])->group(function () {
     Route::post('/logout', [AuthController::class, 'logout']);
     Route::get('/user', [AuthController::class, 'user']);
     

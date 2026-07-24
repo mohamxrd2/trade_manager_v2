@@ -7,6 +7,7 @@ use App\Models\Notification;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Validator;
 
 class NotificationController extends Controller
@@ -190,6 +191,8 @@ class NotificationController extends Controller
      */
     public function unreadCount(): JsonResponse
     {
+        Log::info('[DIAG] NotificationController::unreadCount: entrée');
+
         try {
             $user = Auth::user();
 
@@ -204,6 +207,11 @@ class NotificationController extends Controller
                 ->where('read', false)
                 ->count();
 
+            Log::info('[DIAG] NotificationController::unreadCount: succès', [
+                'user_id' => $user->id,
+                'unread_count' => $count,
+            ]);
+
             return response()->json([
                 'success' => true,
                 'data' => [
@@ -211,7 +219,15 @@ class NotificationController extends Controller
                 ]
             ], 200);
 
-        } catch (\Exception $e) {
+        } catch (\Throwable $e) {
+            Log::error('[DIAG] NotificationController::unreadCount: exception', [
+                'exception_class' => get_class($e),
+                'message' => $e->getMessage(),
+                'file' => $e->getFile(),
+                'line' => $e->getLine(),
+                'trace' => $e->getTraceAsString(),
+            ]);
+
             return response()->json([
                 'success' => false,
                 'message' => 'Erreur lors de la récupération du nombre de notifications non lues',
