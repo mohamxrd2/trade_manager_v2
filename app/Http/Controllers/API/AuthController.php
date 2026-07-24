@@ -350,6 +350,17 @@ class AuthController extends Controller
     {
         $user = Auth::guard('web')->user();
 
+        // TEMPORAIRE — instrumentation de diagnostic du flux OAuth en
+        // production (social_auth_failed / session non reconnue après
+        // exchangeCode). À retirer une fois la cause identifiée et corrigée.
+        Log::info('[OAuth] AuthController::user() appelé', [
+            'session_id' => $request->session()->getId(),
+            'has_cookie_session' => $request->hasCookie(config('session.cookie')),
+            'has_cookie_xsrf' => $request->hasCookie('XSRF-TOKEN'),
+            'authenticated' => (bool) $user,
+            'user_id' => $user?->id,
+        ]);
+
         if (!$user) {
             return response()->json(['message' => 'Non authentifié'], 401);
         }
