@@ -129,10 +129,17 @@ class SocialAuthController extends Controller
                 'message' => 'Connexion réussie via ' . ucfirst($provider),
                 'data' => ['user' => $user],
             ]);
-        } catch (\Exception $e) {
+        } catch (\Throwable $e) {
+            // TEMPORAIRE — diagnostic de la cause exacte du social_auth_failed
+            // en production. À retirer (revenir au logging minimal) une fois
+            // la vraie cause identifiée et corrigée.
             Log::error('Erreur d\'échange de code OAuth', [
                 'provider' => $provider,
-                'error' => $e->getMessage(),
+                'exception_class' => get_class($e),
+                'message' => $e->getMessage(),
+                'file' => $e->getFile(),
+                'line' => $e->getLine(),
+                'trace' => $e->getTraceAsString(),
             ]);
 
             return response()->json([
