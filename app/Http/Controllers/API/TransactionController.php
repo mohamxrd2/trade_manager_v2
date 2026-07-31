@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Models\Article;
 use App\Models\Transaction;
 use App\Services\NotificationService;
+use App\Support\RequestTimer;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
@@ -18,9 +19,9 @@ class TransactionController extends Controller
     /**
      * Display a listing of the transactions for the authenticated user.
      */
-    public function index(): JsonResponse
+    public function index(RequestTimer $timer): JsonResponse
     {
-        Log::info('[DIAG] TransactionController::index: entrée', ['user_id' => Auth::id()]);
+        $timer->mark('TransactionController::index: entrée contrôleur', ['user_id' => Auth::id()]);
 
         try {
             $transactions = Transaction::where('user_id', Auth::id())
@@ -32,7 +33,7 @@ class TransactionController extends Controller
                 ->orderBy('created_at', 'desc')
                 ->get();
 
-            Log::info('[DIAG] TransactionController::index: succès', [
+            $timer->mark('TransactionController::index: sortie contrôleur (succès)', [
                 'user_id' => Auth::id(),
                 'count' => $transactions->count(),
             ]);

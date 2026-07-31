@@ -5,6 +5,7 @@ namespace App\Http\Controllers\API;
 use App\Http\Controllers\Controller;
 use App\Models\Company;
 use App\Models\UserSetting;
+use App\Support\RequestTimer;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
@@ -106,27 +107,30 @@ class OnboardingController extends Controller
     /**
      * Check if user has completed onboarding
      */
-    public function check(): JsonResponse
+    public function check(RequestTimer $timer): JsonResponse
     {
-        Log::info('[DIAG] OnboardingController::check: entrée');
+        $timer->mark('OnboardingController::check: entrée contrôleur');
 
         try {
             $user = Auth::user();
 
             if (!$user) {
+                $timer->mark('OnboardingController::check: sortie (non authentifié)');
                 return response()->json([
                     'success' => false,
                     'message' => 'Utilisateur non authentifié'
                 ], 401);
             }
 
+            $timer->mark('OnboardingController::check: avant load(company, settings)');
             $user->load(['company', 'settings']);
+            $timer->mark('OnboardingController::check: après load(company, settings)');
 
             $hasCompany = $user->company !== null;
             $hasSettings = $user->settings !== null;
             $isComplete = $hasCompany && $hasSettings;
 
-            Log::info('[DIAG] OnboardingController::check: succès', [
+            $timer->mark('OnboardingController::check: sortie contrôleur (succès)', [
                 'user_id' => $user->id,
                 'has_company' => $hasCompany,
                 'has_settings' => $hasSettings,

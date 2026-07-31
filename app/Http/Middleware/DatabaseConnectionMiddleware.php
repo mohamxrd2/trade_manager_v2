@@ -2,6 +2,7 @@
 
 namespace App\Http\Middleware;
 
+use App\Support\RequestTimer;
 use Closure;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -10,7 +11,7 @@ use Symfony\Component\HttpFoundation\Response;
 
 /**
  * Middleware pour gérer les erreurs de connexion à la base de données.
- * 
+ *
  * Ce middleware vérifie la disponibilité de la base de données et gère
  * les erreurs de connexion de manière gracieuse en retournant une réponse
  * JSON appropriée au lieu d'une erreur 500 cassée.
@@ -27,10 +28,13 @@ class DatabaseConnectionMiddleware
      */
     protected int $retryDelay;
 
-    public function __construct()
+    protected RequestTimer $timer;
+
+    public function __construct(RequestTimer $timer)
     {
         $this->maxRetries = (int) config('database.connections.pgsql.retry_attempts', 3);
         $this->retryDelay = (int) config('database.connections.pgsql.retry_delay', 100);
+        $this->timer = $timer;
     }
 
     /**
@@ -43,15 +47,14 @@ class DatabaseConnectionMiddleware
         // TEMPORAIRE — diagnostic des 502 en prod : ce middleware est LE
         // point de blocage suspecté (retry_attempts x DB_TIMEOUT peut
         // bloquer jusqu'à ~15s par requête sur un process mono-worker).
-        $start = microtime(true);
+        $this->timer->mark('DatabaseConnectionMiddleware: début', ['path' => $request->path()]);
 
         // Vérifier la connexion DB avec retry automatique
         $ok = $this->checkDatabaseConnectionWithRetry($request->path());
 
-        Log::info('[DIAG] DatabaseConnectionMiddleware terminé', [
+        $this->timer->mark('DatabaseConnectionMiddleware: fin', [
             'path' => $request->path(),
             'db_check_ok' => $ok,
-            'duration_ms' => round((microtime(true) - $start) * 1000, 1),
         ]);
 
         if (!$ok) {
@@ -74,7 +77,7 @@ class DatabaseConnectionMiddleware
                 // Tente une requête simple pour vérifier la connexion
                 DB::connection()->getPdo();
 
-                Log::info('[DIAG] DatabaseConnectionMiddleware: connexion OK', [
+                $this->timer->mark('DatabaseConnectionMiddleware: connexion OK', [
                     'path' => $path,
                     'attempt' => $attempts + 1,
                     'attempt_duration_ms' => round((microtime(true) - $attemptStart) * 1000, 1),
@@ -84,7 +87,7 @@ class DatabaseConnectionMiddleware
             } catch (\PDOException $e) {
                 $attempts++;
 
-                Log::warning("Tentative de connexion DB échouée ({$attempts}/{$this->maxRetries})", [
+                $this->timer->mark("DatabaseConnectionMiddleware: tentative {$attempts}/{$this->maxRetries} échouée", [
                     'path' => $path,
                     'attempt_duration_ms' => round((microtime(true) - $attemptStart) * 1000, 1),
                     'error' => $e->getMessage(),
@@ -96,9 +99,14 @@ class DatabaseConnectionMiddleware
                     usleep($this->retryDelay * 1000);
                 }
             } catch (\Exception $e) {
-                Log::error("Erreur inattendue lors de la connexion DB", [
+                $this->timer->mark('DatabaseConnectionMiddleware: erreur inattendue', [
                     'path' => $path,
                     'attempt_duration_ms' => round((microtime(true) - $attemptStart) * 1000, 1),
+                    'exception_class' => get_class($e),
+                    'error' => $e->getMessage(),
+                ]);
+                Log::error("Erreur inattendue lors de la connexion DB", [
+                    'path' => $path,
                     'exception_class' => get_class($e),
                     'error' => $e->getMessage(),
                     'trace' => $e->getTraceAsString(),

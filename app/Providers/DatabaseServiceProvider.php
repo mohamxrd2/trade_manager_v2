@@ -2,6 +2,7 @@
 
 namespace App\Providers;
 
+use App\Support\RequestTimer;
 use Illuminate\Support\ServiceProvider;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -43,8 +44,17 @@ class DatabaseServiceProvider extends ServiceProvider
      */
     public function boot(): void
     {
+        // TEMPORAIRE — instrumentation diagnostic. Ce provider boot avant
+        // le routing/les middlewares : c'est le point le plus précoce
+        // disponible pour démarrer le chrono partagé.
+        $timer = $this->app->make(RequestTimer::class);
+        $timer->start();
+        $timer->mark('DatabaseServiceProvider: avant vérification DB (boot)');
+
         // Vérifier la connexion DB et configurer le fallback de session si nécessaire
         $this->checkDatabaseAndConfigureSession();
+
+        $timer->mark('DatabaseServiceProvider: après vérification DB (boot)');
     }
 
     /**
@@ -67,17 +77,33 @@ class DatabaseServiceProvider extends ServiceProvider
      */
     protected function isDatabaseAvailable(): bool
     {
+        $timer = $this->app->make(RequestTimer::class);
         $status = app('database.status');
         $status->lastCheck = new \DateTime();
 
         try {
             // Timeout court pour la vérification initiale
             $connection = DB::connection();
+
+            // TEMPORAIRE — isole précisément le temps d'établissement de la
+            // connexion PDO à Neon (handshake TCP + auth), séparément du
+            // temps d'exécution du SELECT 1 juste après. getPdo() déclenche
+            // la connexion réelle si elle n'est pas déjà établie.
+            $connectStart = microtime(true);
             $pdo = $connection->getPdo();
-            
-            // Test simple pour vérifier que la connexion fonctionne
+            $timer->mark('Connexion PDO à Neon établie', [
+                'connect_duration_ms' => round((microtime(true) - $connectStart) * 1000, 1),
+            ]);
+
+            // Test simple pour vérifier que la connexion fonctionne.
+            // Appel PDO brut (pas DB::select) : DB::listen() ne le capte
+            // pas, donc on le chronomètre manuellement ici.
+            $queryStart = microtime(true);
             $pdo->query('SELECT 1');
-            
+            $timer->mark('SELECT 1 (vérification connexion) exécuté', [
+                'query_duration_ms' => round((microtime(true) - $queryStart) * 1000, 1),
+            ]);
+
             $status->available = true;
             $status->lastError = null;
             self::$databaseAvailable = true;

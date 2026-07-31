@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Http\Requests\API\RegisterRequest;
 use App\Mail\RegistrationVerificationCode;
 use App\Models\User;
+use App\Support\RequestTimer;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
@@ -346,14 +347,17 @@ class AuthController extends Controller
     /**
      * Get authenticated user
      */
-    public function user(Request $request): JsonResponse
+    public function user(Request $request, RequestTimer $timer): JsonResponse
     {
+        $timer->mark('AuthController::user: entrée contrôleur');
+
         $user = Auth::guard('web')->user();
 
         // TEMPORAIRE — instrumentation de diagnostic du flux OAuth en
         // production (social_auth_failed / session non reconnue après
         // exchangeCode). À retirer une fois la cause identifiée et corrigée.
         Log::info('[OAuth] AuthController::user() appelé', [
+            'request_id' => $timer->id(),
             'session_id' => $request->session()->getId(),
             'has_cookie_session' => $request->hasCookie(config('session.cookie')),
             'has_cookie_xsrf' => $request->hasCookie('XSRF-TOKEN'),
@@ -362,11 +366,16 @@ class AuthController extends Controller
         ]);
 
         if (!$user) {
+            $timer->mark('AuthController::user: sortie contrôleur (non authentifié)');
             return response()->json(['message' => 'Non authentifié'], 401);
         }
 
         // Charger les relations nécessaires
+        $timer->mark('AuthController::user: avant load(company, settings)');
         $user->load(['company', 'settings']);
+        $timer->mark('AuthController::user: après load(company, settings)');
+
+        $timer->mark('AuthController::user: sortie contrôleur (succès)');
 
         // Retourner directement l'utilisateur (format simplifié)
         return response()->json($user);

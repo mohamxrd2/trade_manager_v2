@@ -2,8 +2,10 @@
 
 namespace App\Providers;
 
+use App\Support\RequestTimer;
 use Illuminate\Support\ServiceProvider;
 use Illuminate\Support\Facades\Cookie;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\URL;
 
 class AppServiceProvider extends ServiceProvider
@@ -13,7 +15,10 @@ class AppServiceProvider extends ServiceProvider
      */
     public function register(): void
     {
-        //
+        // TEMPORAIRE — instrumentation de diagnostic des 502/lenteurs en
+        // prod, voir App\Support\RequestTimer. Singleton partagé entre
+        // providers, middlewares, DB::listen() et contrôleurs.
+        $this->app->singleton(RequestTimer::class);
     }
 
     /**
@@ -21,6 +26,22 @@ class AppServiceProvider extends ServiceProvider
      */
     public function boot(): void
     {
+        // TEMPORAIRE — voir ci-dessus. Démarre le chrono le plus tôt
+        // possible (avant le routing et les middlewares) et logue chaque
+        // requête SQL exécutée pendant tout le cycle de vie de la requête,
+        // taguée avec le request_id courant.
+        $timer = $this->app->make(RequestTimer::class);
+        $timer->start();
+
+        DB::listen(function ($query) use ($timer) {
+            $timer->mark('Requête SQL exécutée', [
+                'sql' => $query->sql,
+                'bindings_count' => count($query->bindings),
+                'query_time_ms' => $query->time,
+                'connection' => $query->connectionName,
+            ]);
+        });
+
         // En production, forcer HTTPS si nécessaire
         if (env('APP_ENV') === 'production' && env('FORCE_HTTPS', false)) {
             URL::forceScheme('https');

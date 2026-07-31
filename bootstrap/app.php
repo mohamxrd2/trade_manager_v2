@@ -19,15 +19,37 @@ return Application::configure(basePath: dirname(__DIR__))
     )
     ->withMiddleware(function (Middleware $middleware): void {
         // Middleware pour les routes API
+        // TEMPORAIRE — \App\Http\Middleware\TimingCheckpoint::class.':label'
+        // intercalé entre chaque middleware pour isoler, par déduction
+        // entre deux checkpoints consécutifs, le temps pris par CHAQUE
+        // middleware individuellement (y compris HandleCors et
+        // EnsureFrontendRequestsAreStateful, tiers, non modifiables
+        // directement). À retirer une fois le diagnostic terminé.
         $middleware->api(prepend: [
+            // 0. Le plus externe : rend le tableau consolidé [TIMING-TABLE]
+            //    + mesure la sérialisation réponse (#10), pour TOUTES les
+            //    routes API (y compris publiques : health, login, OAuth).
+            \App\Http\Middleware\TimingSummary::class,
+            \App\Http\Middleware\TimingCheckpoint::class.':pipeline_start',
             // 1. Force les réponses JSON (doit être en premier)
             \App\Http\Middleware\ForceJsonResponse::class,
+            \App\Http\Middleware\TimingCheckpoint::class.':after_force_json',
             // 2. Gestion CORS (doit être avant tout autre middleware)
             \Illuminate\Http\Middleware\HandleCors::class,
+            \App\Http\Middleware\TimingCheckpoint::class.':after_cors',
             // 3. Gestion des connexions DB
             \App\Http\Middleware\DatabaseConnectionMiddleware::class,
+            \App\Http\Middleware\TimingCheckpoint::class.':after_db_connection_check',
             // 4. Authentification Sanctum SPA
             \Laravel\Sanctum\Http\Middleware\EnsureFrontendRequestsAreStateful::class,
+            \App\Http\Middleware\TimingCheckpoint::class.':after_sanctum_stateful',
+        ]);
+
+        // Le plus INTERNE : isole le segment « Controller » pour TOUTES les
+        // routes API (dont OAuth, où se voit la latence de l'appel Google).
+        // TEMPORAIRE — voir App\Http\Middleware\ControllerTiming.
+        $middleware->api(append: [
+            \App\Http\Middleware\ControllerTiming::class,
         ]);
 
         // Alias pour les middlewares personnalisés

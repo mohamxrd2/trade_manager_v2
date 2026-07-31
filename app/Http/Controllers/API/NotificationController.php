@@ -4,6 +4,7 @@ namespace App\Http\Controllers\API;
 
 use App\Http\Controllers\Controller;
 use App\Models\Notification;
+use App\Support\RequestTimer;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
@@ -189,14 +190,15 @@ class NotificationController extends Controller
     /**
      * Get unread count.
      */
-    public function unreadCount(): JsonResponse
+    public function unreadCount(RequestTimer $timer): JsonResponse
     {
-        Log::info('[DIAG] NotificationController::unreadCount: entrée');
+        $timer->mark('NotificationController::unreadCount: entrée contrôleur');
 
         try {
             $user = Auth::user();
 
             if (!$user) {
+                $timer->mark('NotificationController::unreadCount: sortie (non authentifié)');
                 return response()->json([
                     'success' => false,
                     'message' => 'Utilisateur non authentifié'
@@ -207,7 +209,7 @@ class NotificationController extends Controller
                 ->where('read', false)
                 ->count();
 
-            Log::info('[DIAG] NotificationController::unreadCount: succès', [
+            $timer->mark('NotificationController::unreadCount: sortie contrôleur (succès)', [
                 'user_id' => $user->id,
                 'unread_count' => $count,
             ]);
