@@ -47,14 +47,17 @@ class DatabaseServiceProvider extends ServiceProvider
         // TEMPORAIRE — instrumentation diagnostic. Ce provider boot avant
         // le routing/les middlewares : c'est le point le plus précoce
         // disponible pour démarrer le chrono partagé.
-        $timer = $this->app->make(RequestTimer::class);
-        $timer->start();
-        $timer->mark('DatabaseServiceProvider: avant vérification DB (boot)');
+        $this->app->make(RequestTimer::class)->start();
 
-        // Vérifier la connexion DB et configurer le fallback de session si nécessaire
-        $this->checkDatabaseAndConfigureSession();
-
-        $timer->mark('DatabaseServiceProvider: après vérification DB (boot)');
+        // CORRECTIF (diagnostic 502) : checkDatabaseAndConfigureSession()
+        // ouvrait une vraie connexion Neon (getPdo + SELECT 1) sur CHAQUE
+        // requête, même web/console, avant même le routing — ~700ms mesurés
+        // en local, cause principale du 502 sous charge avec le serveur
+        // mono-thread (php artisan serve). Redondant avec
+        // DatabaseConnectionMiddleware, qui fait déjà ce contrôle pour les
+        // routes API avec retry + réponse 503 propre. Retiré ici ; la
+        // méthode reste disponible (isDatabaseUp/recheckDatabase) si besoin
+        // futur, simplement plus appelée automatiquement à chaque requête.
     }
 
     /**
