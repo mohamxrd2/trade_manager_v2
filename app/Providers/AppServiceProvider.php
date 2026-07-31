@@ -6,6 +6,7 @@ use App\Support\RequestTimer;
 use Illuminate\Support\ServiceProvider;
 use Illuminate\Support\Facades\Cookie;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\URL;
 
 class AppServiceProvider extends ServiceProvider
@@ -40,6 +41,21 @@ class AppServiceProvider extends ServiceProvider
                 'query_time_ms' => $query->time,
                 'connection' => $query->connectionName,
             ]);
+
+            // TEMPORAIRE — diagnostic. $query->time est mesuré par Laravel
+            // au ras du driver PDO (temps moteur pur, hors connexion/réseau
+            // avant la requête). Ligne dédiée, grep-able isolément
+            // (indépendamment du bloc [TIMING-TABLE]), pour répondre
+            // précisément à "quelles requêtes SQL dépassent 500 ms".
+            if ($query->time > 500) {
+                Log::warning('[TIMING] SQL LENTE (>500ms)', [
+                    'request_id' => $timer->id(),
+                    'query_time_ms' => $query->time,
+                    'sql' => $query->sql,
+                    'bindings_count' => count($query->bindings),
+                    'connection' => $query->connectionName,
+                ]);
+            }
         });
 
         // En production, forcer HTTPS si nécessaire
