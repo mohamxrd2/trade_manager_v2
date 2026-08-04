@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Http\Requests\API\RegisterRequest;
 use App\Mail\RegistrationVerificationCode;
 use App\Models\User;
+use App\Support\RequestTimer;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
@@ -223,7 +224,16 @@ class AuthController extends Controller
     private function sendVerificationCode(string $email, string $code, string $firstName): bool
     {
         try {
+            // TEMPORAIRE — instrumentation de diagnostic des requêtes >6s,
+            // voir App\Support\RequestTimer. Mesure explicite (Resend
+            // n'est pas appelé via le facade Http:: de Laravel, donc
+            // Http::listen() ne le capte pas) de l'appel réseau réel vers
+            // l'API Resend.
+            $apiStart = microtime(true);
             Mail::to($email)->send(new RegistrationVerificationCode($code, $firstName));
+            app(RequestTimer::class)->mark(RequestTimer::CAT_EXTERNAL_API, 'Resend : envoi email de vérification', [
+                'external_call_duration_ms' => round((microtime(true) - $apiStart) * 1000, 1),
+            ]);
 
             return true;
         } catch (\Throwable $e) {

@@ -4,6 +4,7 @@ namespace App\Http\Controllers\API;
 
 use App\Http\Controllers\Controller;
 use App\Models\User;
+use App\Support\RequestTimer;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
@@ -69,7 +70,18 @@ class SocialAuthController extends Controller
         }
 
         try {
+            // TEMPORAIRE — instrumentation de diagnostic des requêtes >6s,
+            // voir App\Support\RequestTimer. Mesure explicite (pas via
+            // Http::listen(), que Socialite n'utilise pas — il instancie
+            // son propre client Guzzle) de l'appel réseau réel vers le
+            // serveur de token du provider (Google/Facebook).
+            $timer = app(RequestTimer::class);
+            $apiStart = microtime(true);
             $socialUser = Socialite::driver($provider)->stateless()->user();
+            $timer->mark(RequestTimer::CAT_EXTERNAL_API, "OAuth {$provider} : échange code contre profil", [
+                'external_call_duration_ms' => round((microtime(true) - $apiStart) * 1000, 1),
+            ]);
+
             $this->loginSocialUser($request, $socialUser, $provider);
 
             return redirect($frontendUrl . '/auth/callback');
@@ -135,7 +147,16 @@ class SocialAuthController extends Controller
         ]);
 
         try {
+            // TEMPORAIRE — instrumentation de diagnostic des requêtes >6s,
+            // voir App\Support\RequestTimer. Mesure explicite de l'appel
+            // réseau réel vers le serveur de token du provider (utilisé
+            // par Google en prod, la redirect URI pointant vers le
+            // frontend qui relaie le code ici).
+            $apiStart = microtime(true);
             $socialUser = Socialite::driver($provider)->stateless()->user();
+            app(RequestTimer::class)->mark(RequestTimer::CAT_EXTERNAL_API, "OAuth {$provider} : échange code contre profil", [
+                'external_call_duration_ms' => round((microtime(true) - $apiStart) * 1000, 1),
+            ]);
 
             Log::info('[OAuth] exchangeCode: Socialite::user() résolu', [
                 'provider' => $provider,

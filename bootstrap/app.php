@@ -19,15 +19,28 @@ return Application::configure(basePath: dirname(__DIR__))
     )
     ->withMiddleware(function (Middleware $middleware): void {
         // Middleware pour les routes API
+        // TEMPORAIRE — TimingSummary/TimingCheckpoint : instrumentation de
+        // diagnostic des requêtes >6s, voir App\Support\RequestTimer. À
+        // retirer (ici + les alias 'timing'/'controller-timing' ci-dessous
+        // + leur usage dans routes/api.php) une fois le diagnostic terminé.
         $middleware->api(prepend: [
+            // 0. Le plus externe : mesure la sérialisation réponse et
+            //    déclenche le tableau chronologique, pour TOUTES les
+            //    routes API (y compris publiques : health, login, OAuth).
+            \App\Http\Middleware\TimingSummary::class,
+            \App\Http\Middleware\TimingCheckpoint::class.':BOOTSTRAP,Entrée pipeline middleware (fin bootstrap providers)',
             // 1. Force les réponses JSON (doit être en premier)
             \App\Http\Middleware\ForceJsonResponse::class,
+            \App\Http\Middleware\TimingCheckpoint::class.':MIDDLEWARE,ForceJsonResponse terminé',
             // 2. Gestion CORS (doit être avant tout autre middleware)
             \Illuminate\Http\Middleware\HandleCors::class,
+            \App\Http\Middleware\TimingCheckpoint::class.':MIDDLEWARE,HandleCors terminé',
             // 3. Gestion des connexions DB
             \App\Http\Middleware\DatabaseConnectionMiddleware::class,
+            \App\Http\Middleware\TimingCheckpoint::class.':MIDDLEWARE,DatabaseConnectionMiddleware terminé',
             // 4. Authentification Sanctum SPA
             \Laravel\Sanctum\Http\Middleware\EnsureFrontendRequestsAreStateful::class,
+            \App\Http\Middleware\TimingCheckpoint::class.':MIDDLEWARE,EnsureFrontendRequestsAreStateful terminé',
         ]);
 
         // Alias pour les middlewares personnalisés
@@ -35,6 +48,11 @@ return Application::configure(basePath: dirname(__DIR__))
             'company.ready' => \App\Http\Middleware\EnsureCompanyInvoiceReady::class,
             // TEMPORAIRE — diagnostic des 502 en prod, voir LogApiDiagnostics.
             'diag.log' => \App\Http\Middleware\LogApiDiagnostics::class,
+            // TEMPORAIRE — voir commentaire ci-dessus, utilisés dans
+            // routes/api.php pour encadrer précisément auth:sanctum et le
+            // dispatch du contrôleur (pas des points de la pile globale).
+            'timing' => \App\Http\Middleware\TimingCheckpoint::class,
+            'controller-timing' => \App\Http\Middleware\ControllerTiming::class,
         ]);
     })
     ->withExceptions(function (Exceptions $exceptions): void {
