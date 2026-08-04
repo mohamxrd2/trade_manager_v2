@@ -46,6 +46,24 @@ class AppServiceProvider extends ServiceProvider
                 'bindings_count' => count($query->bindings),
                 'connection' => $query->connectionName,
             ]);
+
+            // TEMPORAIRE — tableau SQL dédié (voir RequestTimer::logSqlQuery
+            // / renderSqlTable). Purement additif, ne change rien au
+            // comportement : identifie le fichier applicatif et le
+            // contrôleur à l'origine de CETTE requête SQL précise.
+            $origin = $this->resolveQueryOrigin();
+            $route = app('request')->route();
+            $controller = ($route !== null && is_string($route->getActionName()))
+                ? $route->getActionName()
+                : null;
+
+            $timer->logSqlQuery(
+                $query->sql,
+                $query->time,
+                $origin['file'] ?? null,
+                $origin['line'] ?? null,
+                $controller
+            );
         });
 
         // En production, forcer HTTPS si nécessaire
@@ -73,5 +91,39 @@ class AppServiceProvider extends ServiceProvider
         $sql = preg_replace('/\s+/', ' ', trim($sql));
 
         return strlen($sql) > 60 ? substr($sql, 0, 57) . '...' : $sql;
+    }
+
+    /**
+     * TEMPORAIRE — voir DB::listen() ci-dessus. Remonte la pile d'appel
+     * depuis ce listener (interne à Illuminate\Database) jusqu'au premier
+     * frame situé dans app/ : c'est le code applicatif (contrôleur,
+     * modèle, service...) qui a réellement déclenché cette requête SQL,
+     * par opposition aux frames internes de Illuminate\Database\Connection
+     * qui n'apprendraient rien.
+     */
+    private function resolveQueryOrigin(): ?array
+    {
+        $appPath = app_path() . DIRECTORY_SEPARATOR;
+
+        foreach (debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS, 30) as $frame) {
+            if (!isset($frame['file']) || !str_starts_with($frame['file'], $appPath)) {
+                continue;
+            }
+
+            // Ce listener DB::listen() est lui-même défini dans ce fichier
+            // (app/Providers/AppServiceProvider.php) : sans cette exclusion,
+            // le premier frame "dans app/" serait systématiquement lui-même
+            // plutôt que le vrai code appelant (contrôleur, modèle...).
+            if ($frame['file'] === __FILE__) {
+                continue;
+            }
+
+            return [
+                'file' => str_replace(base_path() . DIRECTORY_SEPARATOR, '', $frame['file']),
+                'line' => $frame['line'] ?? null,
+            ];
+        }
+
+        return null;
     }
 }

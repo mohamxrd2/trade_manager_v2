@@ -50,6 +50,16 @@ class RequestTimer
     private array $marks = [];
 
     /**
+     * TEMPORAIRE — détail de chaque requête SQL (voir DB::listen() dans
+     * AppServiceProvider::boot()), pour le tableau SQL dédié rendu à la fin
+     * de la requête. Séparé de $marks (qui reste, lui, inchangé) pour ne
+     * rien modifier du comportement existant.
+     *
+     * @var array<int, array{sql: string, time_ms: float, file: ?string, line: ?int, controller: ?string}>
+     */
+    private array $sqlQueries = [];
+
+    /**
      * Démarre le chrono pour la requête courante. Idempotent : si déjà
      * démarré par un provider qui boot avant un autre, ne réinitialise rien.
      */
@@ -104,6 +114,23 @@ class RequestTimer
     }
 
     /**
+     * TEMPORAIRE — enregistre le détail d'une requête SQL exécutée pendant
+     * la requête HTTP courante (voir DB::listen() dans
+     * AppServiceProvider::boot()). N'affecte pas mark()/marks : purement
+     * additif, pour le tableau SQL dédié rendu par total().
+     */
+    public function logSqlQuery(string $sql, float $timeMs, ?string $file, ?int $line, ?string $controller): void
+    {
+        $this->sqlQueries[] = [
+            'sql' => $sql,
+            'time_ms' => $timeMs,
+            'file' => $file,
+            'line' => $line,
+            'controller' => $controller,
+        ];
+    }
+
+    /**
      * Log final avec le temps total ET le tableau chronologique consolidé
      * (une ligne par mark(), dans l'ordre réel d'exécution).
      */
@@ -121,6 +148,11 @@ class RequestTimer
         ], $context));
 
         Log::info("\n" . $this->renderTable($totalMs, $context));
+
+        $sqlTable = $this->renderSqlTable();
+        if ($sqlTable !== '') {
+            Log::info("\n" . $sqlTable);
+        }
     }
 
     private function renderTable(float $totalMs, array $finalContext = []): string
@@ -172,6 +204,49 @@ class RequestTimer
             $lines[] = $this->leaderLine("  {$cat}", $ms, $width) . "  ({$pct}%)";
         }
         $lines[] = str_repeat('═', $width + 14);
+
+        return implode("\n", $lines);
+    }
+
+    /**
+     * TEMPORAIRE — tableau dédié détaillant CHAQUE requête SQL de la
+     * requête HTTP courante : SQL complet, temps exact (mesuré par Laravel
+     * au ras du driver PDO), fichier/ligne applicatif (premier frame de la
+     * pile d'appel situé dans app/, donc hors vendor/Illuminate) et
+     * contrôleur concerné (route courante au moment de l'exécution de la
+     * requête SQL). Numéroté dans l'ordre réel d'exécution, avec le nombre
+     * total de requêtes et le temps SQL cumulé.
+     */
+    private function renderSqlTable(): string
+    {
+        if (empty($this->sqlQueries)) {
+            return '';
+        }
+
+        $width = 80;
+        $sep = str_repeat('─', $width);
+
+        $lines = [str_repeat('═', $width)];
+        $lines[] = sprintf('[SQL-TABLE] request_id=%s — détail des requêtes SQL', $this->requestId);
+        $lines[] = $sep;
+
+        $totalMs = 0.0;
+        foreach ($this->sqlQueries as $i => $q) {
+            $totalMs += $q['time_ms'];
+
+            $lines[] = '';
+            $lines[] = ($i + 1) . '.';
+            $lines[] = $q['sql'];
+            $lines[] = rtrim(rtrim(number_format($q['time_ms'], 1, '.', ''), '0'), '.') . ' ms';
+            $lines[] = 'Fichier     : ' . ($q['file'] !== null ? $q['file'] . ($q['line'] !== null ? ':' . $q['line'] : '') : 'non déterminé (hors app/)');
+            $lines[] = 'Contrôleur  : ' . ($q['controller'] ?? 'N/A (pas de route résolue à ce stade)');
+        }
+
+        $lines[] = '';
+        $lines[] = $sep;
+        $lines[] = 'Nombre total de requêtes SQL : ' . count($this->sqlQueries);
+        $lines[] = 'Temps SQL total : ' . rtrim(rtrim(number_format($totalMs, 1, '.', ''), '0'), '.') . ' ms';
+        $lines[] = str_repeat('═', $width);
 
         return implode("\n", $lines);
     }
