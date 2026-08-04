@@ -1,0 +1,52 @@
+server {
+    # ${PORT} est substitué au démarrage du conteneur (envsubst, voir
+    # docker/entrypoint.sh) — Render fournit ce port dynamiquement au
+    # runtime, jamais au moment du build de l'image.
+    listen ${PORT};
+    listen [::]:${PORT};
+    server_name _;
+
+    root /app/public;
+    index index.php;
+
+    # Doit rester >= 2M : limite de validation du logo d'entreprise
+    # (CompanyController, règle 'max:2048' = 2 Mo) + marge pour l'overhead
+    # multipart/form-data. PHP lui-même plafonne déjà à 2M par défaut
+    # (upload_max_filesize natif, aucun php.ini actif dans l'image) : cette
+    # valeur ne doit pas être plus stricte que ce plafond existant.
+    client_max_body_size 3m;
+
+    access_log /dev/stdout;
+    error_log /dev/stderr;
+
+    # gzip est déjà activé par défaut (nginx.conf du paquet Debian, non
+    # modifié) mais gzip_types y est laissé commenté, donc seul text/html
+    # est compressé par défaut. Cette app étant une API JSON quasi pure,
+    # sans cette ligne aucune réponse n'était réellement compressée.
+    gzip_types application/json application/javascript text/css text/plain;
+    gzip_min_length 512;
+
+    # Routage standard Laravel : toute URL sans fichier correspondant passe
+    # par index.php (front controller), qui gère le routing applicatif.
+    location / {
+        try_files $uri $uri/ /index.php?$query_string;
+    }
+
+    location ~ \.php$ {
+        fastcgi_pass unix:/run/php-fpm.sock;
+        fastcgi_index index.php;
+        include fastcgi_params;
+        fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
+        # Mitigation httpoxy (CVE-2016-5385) : empêche un header HTTP
+        # "Proxy" arbitraire envoyé par le client d'écraser la variable
+        # d'environnement HTTP_PROXY vue par PHP.
+        fastcgi_param HTTP_PROXY "";
+    }
+
+    # Bloque l'accès direct à tout fichier caché (.env, .git, etc.) s'il
+    # se retrouvait un jour dans public/ — .env lui-même est déjà hors de
+    # portée du document root Laravel, ceci est une protection additionnelle.
+    location ~ /\.(?!well-known) {
+        deny all;
+    }
+}
