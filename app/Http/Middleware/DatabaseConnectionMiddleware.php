@@ -71,8 +71,51 @@ class DatabaseConnectionMiddleware
         while ($attempts < $this->maxRetries) {
             $attemptStart = microtime(true);
             try {
+                // TEMPORAIRE — instrumentation de diagnostic : déterminer si
+                // les ~426ms mesurées sur getPdo() sont payées à CHAQUE
+                // requête ou uniquement sur la première requête de chaque
+                // worker PHP-FPM.
+                //
+                // Pas de comparaison "avant/après" en mémoire (via une
+                // propriété statique) : PHP réinitialise entièrement l'espace
+                // mémoire "userland" — classes, statics, variables — à CHAQUE
+                // requête, même quand le même worker/process OS traite les
+                // requêtes successives (vérifié empiriquement : un flag
+                // statique testé localement restait à false sur 5 requêtes
+                // consécutives confirmées comme traitées par le même PID).
+                // Seuls des mécanismes bas niveau explicitement conçus pour
+                // ça survivent au-delà d'une requête — dont le pool de
+                // connexions persistantes de PDO (PDO::ATTR_PERSISTENT),
+                // justement ce qu'on cherche à observer ici.
+                //
+                // On logue donc uniquement les FAITS BRUTS de CETTE requête ;
+                // la comparaison entre requêtes se fait a posteriori, en
+                // regroupant les lignes de log par php_fpm_worker_pid une
+                // fois les 20 requêtes de test effectuées : PID identique +
+                // pg_backend_pid_courant identique + getpdo_duration_ms bas
+                // => connexion réellement réutilisée par ce worker.
+                $workerPid = getmypid();
+
                 // Tente une requête simple pour vérifier la connexion
-                DB::connection()->getPdo();
+                $getPdoStart = microtime(true);
+                $pdo = DB::connection()->getPdo();
+                $getPdoDurationMs = round((microtime(true) - $getPdoStart) * 1000, 1);
+
+                // pg_backend_pid() : PID du process PostgreSQL/Neon qui gère
+                // CETTE connexion physique — fait vérifiable côté serveur,
+                // pas une déduction basée sur le temps écoulé. Coût mesuré
+                // séparément pour ne pas fausser getpdo_duration_ms.
+                $pgBackendPidStart = microtime(true);
+                $currentPgBackendPid = (int) $pdo->query('SELECT pg_backend_pid()')->fetchColumn();
+                $pgBackendPidQueryMs = round((microtime(true) - $pgBackendPidStart) * 1000, 1);
+
+                Log::info('[DB-CONN-DIAG] getPdo() — faits bruts pour cette requête', [
+                    'php_fpm_worker_pid' => $workerPid,
+                    'getpdo_duration_ms' => $getPdoDurationMs,
+                    'pdo_attr_persistent_actif_sur_ce_handle' => $pdo->getAttribute(\PDO::ATTR_PERSISTENT),
+                    'pg_backend_pid_courant' => $currentPgBackendPid,
+                    'cout_diagnostic_pg_backend_pid_ms' => $pgBackendPidQueryMs,
+                ]);
 
                 Log::info('[DIAG] DatabaseConnectionMiddleware: connexion OK', [
                     'path' => $path,
