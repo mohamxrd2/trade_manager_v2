@@ -56,7 +56,12 @@ class DatabaseServiceProvider extends ServiceProvider
         $timer->mark(RequestTimer::CAT_BOOTSTRAP, 'Entrée DatabaseServiceProvider::boot()');
 
         // Vérifier la connexion DB et configurer le fallback de session si nécessaire
-        $this->checkDatabaseAndConfigureSession();
+        // Désactivé : ~880ms/requête (getPdo+SELECT 1 vers Neon), redondant avec
+        // DatabaseConnectionMiddleware et les gestionnaires PDOException/QueryException
+        // de bootstrap/app.php. Aucun appel externe à checkDatabaseAndConfigureSession(),
+        // isDatabaseAvailable(), switchSessionToFile(), recheckDatabase() ou isDatabaseUp()
+        // ailleurs dans le projet (vérifié) — voir historique git pour réactiver.
+        // $this->checkDatabaseAndConfigureSession();
 
         $timer->mark(RequestTimer::CAT_BOOTSTRAP, 'Sortie DatabaseServiceProvider::boot() (après checkDatabaseAndConfigureSession)');
     }
