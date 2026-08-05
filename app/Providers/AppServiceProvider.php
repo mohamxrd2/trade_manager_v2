@@ -94,12 +94,33 @@ class AppServiceProvider extends ServiceProvider
     }
 
     /**
+     * TEMPORAIRE — middlewares/providers d'instrumentation temporaire
+     * (voir App\Support\RequestTimer) : eux aussi situés dans app/, donc
+     * candidats au même titre qu'un vrai contrôleur/modèle si on ne les
+     * excluait pas explicitement. Un appel qui traverse UNIQUEMENT ces
+     * fichiers avant de sortir vers du code framework (ex: Sanctum résout
+     * l'utilisateur du token pendant l'exécution d'un de ces middlewares)
+     * n'a pas d'origine applicative réelle à rapporter : mieux vaut
+     * "non déterminé" qu'un faux positif qui pointe vers l'instrumentation
+     * elle-même plutôt que vers le code métier.
+     */
+    private const IGNORED_ORIGIN_FILES = [
+        'AppServiceProvider.php',
+        'TimingCheckpoint.php',
+        'ControllerTiming.php',
+        'TimingSummary.php',
+        'LogApiDiagnostics.php',
+    ];
+
+    /**
      * TEMPORAIRE — voir DB::listen() ci-dessus. Remonte la pile d'appel
      * depuis ce listener (interne à Illuminate\Database) jusqu'au premier
-     * frame situé dans app/ : c'est le code applicatif (contrôleur,
+     * frame situé dans app/, hors fichiers d'instrumentation eux-mêmes
+     * (IGNORED_ORIGIN_FILES) : c'est le code applicatif (contrôleur,
      * modèle, service...) qui a réellement déclenché cette requête SQL,
      * par opposition aux frames internes de Illuminate\Database\Connection
-     * qui n'apprendraient rien.
+     * (qui n'apprendraient rien) et aux frames de l'instrumentation
+     * elle-même (qui donneraient une fausse origine).
      */
     private function resolveQueryOrigin(): ?array
     {
@@ -110,11 +131,7 @@ class AppServiceProvider extends ServiceProvider
                 continue;
             }
 
-            // Ce listener DB::listen() est lui-même défini dans ce fichier
-            // (app/Providers/AppServiceProvider.php) : sans cette exclusion,
-            // le premier frame "dans app/" serait systématiquement lui-même
-            // plutôt que le vrai code appelant (contrôleur, modèle...).
-            if ($frame['file'] === __FILE__) {
+            if (in_array(basename($frame['file']), self::IGNORED_ORIGIN_FILES, true)) {
                 continue;
             }
 

@@ -149,10 +149,7 @@ class RequestTimer
 
         Log::info("\n" . $this->renderTable($totalMs, $context));
 
-        $sqlTable = $this->renderSqlTable();
-        if ($sqlTable !== '') {
-            Log::info("\n" . $sqlTable);
-        }
+        $this->logSqlTable();
     }
 
     private function renderTable(float $totalMs, array $finalContext = []): string
@@ -209,46 +206,57 @@ class RequestTimer
     }
 
     /**
-     * TEMPORAIRE — tableau dédié détaillant CHAQUE requête SQL de la
-     * requête HTTP courante : SQL complet, temps exact (mesuré par Laravel
-     * au ras du driver PDO), fichier/ligne applicatif (premier frame de la
-     * pile d'appel situé dans app/, donc hors vendor/Illuminate) et
-     * contrôleur concerné (route courante au moment de l'exécution de la
-     * requête SQL). Numéroté dans l'ordre réel d'exécution, avec le nombre
-     * total de requêtes et le temps SQL cumulé.
+     * TEMPORAIRE — détail de CHAQUE requête SQL de la requête HTTP
+     * courante : SQL complet, temps exact (mesuré par Laravel au ras du
+     * driver PDO), fichier/ligne applicatif (premier frame de la pile
+     * d'appel situé dans app/, hors vendor/Illuminate ET hors les
+     * middlewares d'instrumentation eux-mêmes) et contrôleur concerné.
+     * Numéroté dans l'ordre réel d'exécution, avec le nombre total de
+     * requêtes et le temps SQL cumulé.
+     *
+     * Émis en PLUSIEURS petites lignes [SQL-TABLE] (une par requête SQL +
+     * une ligne d'en-tête + une ligne de total), exactement comme mark()
+     * émet une ligne [TIMING] par événement — PAS en un seul gros bloc
+     * multi-lignes (ancien renderSqlTable() concaténé en un seul
+     * Log::info()) : un message unique de plusieurs dizaines/centaines de
+     * lignes (routes avec beaucoup de requêtes N+1) dépasse la taille
+     * qu'un pipeline de logs hébergé (ex. Render) affiche ou conserve
+     * correctement pour UNE seule entrée, et disparaît silencieusement —
+     * ce que mark(), lui, n'a jamais eu comme problème car chaque requête
+     * y est déjà sa propre ligne de log indépendante.
      */
-    private function renderSqlTable(): string
+    private function logSqlTable(): void
     {
         if (empty($this->sqlQueries)) {
-            return '';
+            return;
         }
 
-        $width = 80;
-        $sep = str_repeat('─', $width);
-
-        $lines = [str_repeat('═', $width)];
-        $lines[] = sprintf('[SQL-TABLE] request_id=%s — détail des requêtes SQL', $this->requestId);
-        $lines[] = $sep;
+        Log::info(sprintf(
+            '[SQL-TABLE] request_id=%s — %d requête(s) SQL',
+            $this->requestId,
+            count($this->sqlQueries)
+        ));
 
         $totalMs = 0.0;
         foreach ($this->sqlQueries as $i => $q) {
             $totalMs += $q['time_ms'];
+            $timeLabel = rtrim(rtrim(number_format($q['time_ms'], 1, '.', ''), '0'), '.') . ' ms';
 
-            $lines[] = '';
-            $lines[] = ($i + 1) . '.';
-            $lines[] = $q['sql'];
-            $lines[] = rtrim(rtrim(number_format($q['time_ms'], 1, '.', ''), '0'), '.') . ' ms';
-            $lines[] = 'Fichier     : ' . ($q['file'] !== null ? $q['file'] . ($q['line'] !== null ? ':' . $q['line'] : '') : 'non déterminé (hors app/)');
-            $lines[] = 'Contrôleur  : ' . ($q['controller'] ?? 'N/A (pas de route résolue à ce stade)');
+            Log::info(sprintf('[SQL-TABLE] %d. %s — %s', $i + 1, $timeLabel, $q['sql']), [
+                'request_id' => $this->requestId,
+                'query_number' => $i + 1,
+                'time_ms' => $q['time_ms'],
+                'file' => $q['file'],
+                'line' => $q['line'],
+                'controller' => $q['controller'],
+            ]);
         }
 
-        $lines[] = '';
-        $lines[] = $sep;
-        $lines[] = 'Nombre total de requêtes SQL : ' . count($this->sqlQueries);
-        $lines[] = 'Temps SQL total : ' . rtrim(rtrim(number_format($totalMs, 1, '.', ''), '0'), '.') . ' ms';
-        $lines[] = str_repeat('═', $width);
-
-        return implode("\n", $lines);
+        Log::info(sprintf(
+            '[SQL-TABLE] Nombre total de requêtes SQL : %d — Temps SQL total : %s ms',
+            count($this->sqlQueries),
+            rtrim(rtrim(number_format($totalMs, 1, '.', ''), '0'), '.')
+        ), ['request_id' => $this->requestId]);
     }
 
     private function leaderLine(string $label, float $ms, int $width): string
