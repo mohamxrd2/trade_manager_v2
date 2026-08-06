@@ -23,22 +23,39 @@ class TransactionController extends Controller
         Log::info('[DIAG] TransactionController::index: entrée', ['user_id' => Auth::id()]);
 
         try {
+            $withSoldQuantity = function ($query) {
+                $query->withSum(['transactions' => function ($q) {
+                    $q->where('type', 'sale');
+                }], 'quantity');
+            };
+
             $transactions = Transaction::where('user_id', Auth::id())
                 ->with([
-                    'article' => function ($query) {
-                        $query->withSum(['transactions' => function ($q) {
-                            $q->where('type', 'sale');
-                        }], 'quantity');
-                    },
                     // Précharge la relation utilisée par Article::getLowStockAttribute()
                     // (appended, donc calculée pour CHAQUE article à la sérialisation) :
                     // sans ça, relationLoaded('user') est faux pour chaque instance et
                     // déclenche un ->load('user.settings') par transaction (N+1 massif).
+                    'article' => $withSoldQuantity,
                     'article.user.settings',
-                    'variation',
+                    // Variation::getLowStockAttribute()/getSoldQuantityAttribute() ont
+                    // exactement le même besoin (relationLoaded('article') + withSum),
+                    // sans quoi le même N+1 se reproduit côté variation.
+                    'variation' => $withSoldQuantity,
+                    'variation.article.user.settings',
                 ])
                 ->orderBy('created_at', 'desc')
                 ->get();
+
+            // article.user.settings/variation.article.user.settings ne sont chargés
+            // QUE pour alimenter les accessors low_stock/sales_percentage en mémoire
+            // (évite le lazy load) — le User complet ne doit pas se retrouver dans la
+            // réponse JSON : il a lui-même 8 accessors "appended" (dont plusieurs avec
+            // leur propre requête SQL, ex. getTotalStockValueAttribute()), qui
+            // s'exécuteraient sinon une fois PAR TRANSACTION à la sérialisation.
+            $transactions->each(function (Transaction $transaction) {
+                $transaction->article?->makeHidden('user');
+                $transaction->variation?->article?->makeHidden('user');
+            });
 
             Log::info('[DIAG] TransactionController::index: succès', [
                 'user_id' => Auth::id(),
