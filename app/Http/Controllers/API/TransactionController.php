@@ -24,11 +24,19 @@ class TransactionController extends Controller
 
         try {
             $transactions = Transaction::where('user_id', Auth::id())
-                ->with(['article' => function ($query) {
-                    $query->withSum(['transactions' => function ($q) {
-                        $q->where('type', 'sale');
-                    }], 'quantity');
-                }, 'variation'])
+                ->with([
+                    'article' => function ($query) {
+                        $query->withSum(['transactions' => function ($q) {
+                            $q->where('type', 'sale');
+                        }], 'quantity');
+                    },
+                    // Précharge la relation utilisée par Article::getLowStockAttribute()
+                    // (appended, donc calculée pour CHAQUE article à la sérialisation) :
+                    // sans ça, relationLoaded('user') est faux pour chaque instance et
+                    // déclenche un ->load('user.settings') par transaction (N+1 massif).
+                    'article.user.settings',
+                    'variation',
+                ])
                 ->orderBy('created_at', 'desc')
                 ->get();
 
