@@ -4,7 +4,6 @@ namespace App\Http\Controllers\API;
 
 use App\Http\Controllers\Controller;
 use App\Models\User;
-use App\Support\RequestTimer;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
@@ -70,17 +69,7 @@ class SocialAuthController extends Controller
         }
 
         try {
-            // TEMPORAIRE — instrumentation de diagnostic des requêtes >6s,
-            // voir App\Support\RequestTimer. Mesure explicite (pas via
-            // Http::listen(), que Socialite n'utilise pas — il instancie
-            // son propre client Guzzle) de l'appel réseau réel vers le
-            // serveur de token du provider (Google/Facebook).
-            $timer = app(RequestTimer::class);
-            $apiStart = microtime(true);
             $socialUser = Socialite::driver($provider)->stateless()->user();
-            $timer->mark(RequestTimer::CAT_EXTERNAL_API, "OAuth {$provider} : échange code contre profil", [
-                'external_call_duration_ms' => round((microtime(true) - $apiStart) * 1000, 1),
-            ]);
 
             $this->loginSocialUser($request, $socialUser, $provider);
 
@@ -109,15 +98,6 @@ class SocialAuthController extends Controller
      */
     public function exchangeCode(Request $request, string $provider): JsonResponse
     {
-        // TEMPORAIRE — instrumentation de diagnostic du flux OAuth en
-        // production (social_auth_failed / session non reconnue). À retirer
-        // une fois la cause identifiée et corrigée.
-        Log::info('[OAuth] exchangeCode: entrée', [
-            'provider' => $provider,
-            'session_id_avant' => $request->session()->getId(),
-            'already_authenticated' => Auth::guard('web')->check(),
-        ]);
-
         if (!in_array($provider, self::VALID_PROVIDERS)) {
             return response()->json([
                 'success' => false,
@@ -130,11 +110,6 @@ class SocialAuthController extends Controller
         // ("invalid_grant") alors que la session est déjà valide depuis le 1er.
         // On court-circuite cette course dans ce cas précis.
         if (Auth::guard('web')->check()) {
-            Log::info('[OAuth] exchangeCode: déjà authentifié, court-circuit', [
-                'provider' => $provider,
-                'user_id' => Auth::guard('web')->id(),
-            ]);
-
             return response()->json([
                 'success' => true,
                 'message' => 'Déjà connecté',
@@ -147,33 +122,9 @@ class SocialAuthController extends Controller
         ]);
 
         try {
-            // TEMPORAIRE — instrumentation de diagnostic des requêtes >6s,
-            // voir App\Support\RequestTimer. Mesure explicite de l'appel
-            // réseau réel vers le serveur de token du provider (utilisé
-            // par Google en prod, la redirect URI pointant vers le
-            // frontend qui relaie le code ici).
-            $apiStart = microtime(true);
             $socialUser = Socialite::driver($provider)->stateless()->user();
-            app(RequestTimer::class)->mark(RequestTimer::CAT_EXTERNAL_API, "OAuth {$provider} : échange code contre profil", [
-                'external_call_duration_ms' => round((microtime(true) - $apiStart) * 1000, 1),
-            ]);
-
-            Log::info('[OAuth] exchangeCode: Socialite::user() résolu', [
-                'provider' => $provider,
-                'social_id' => $socialUser->getId(),
-                'email' => $socialUser->getEmail(),
-                'name' => $socialUser->getName(),
-                'has_avatar' => (bool) $socialUser->getAvatar(),
-            ]);
 
             $user = $this->loginSocialUser($request, $socialUser, $provider);
-
-            Log::info('[OAuth] exchangeCode: succès, réponse envoyée', [
-                'provider' => $provider,
-                'user_id' => $user->id,
-                'session_id_apres' => $request->session()->getId(),
-                'auth_check_apres' => Auth::guard('web')->check(),
-            ]);
 
             return response()->json([
                 'success' => true,
@@ -181,16 +132,9 @@ class SocialAuthController extends Controller
                 'data' => ['user' => $user],
             ]);
         } catch (\Throwable $e) {
-            // TEMPORAIRE — diagnostic de la cause exacte du social_auth_failed
-            // en production. À retirer (revenir au logging minimal) une fois
-            // la vraie cause identifiée et corrigée.
             Log::error('Erreur d\'échange de code OAuth', [
                 'provider' => $provider,
-                'exception_class' => get_class($e),
-                'message' => $e->getMessage(),
-                'file' => $e->getFile(),
-                'line' => $e->getLine(),
-                'trace' => $e->getTraceAsString(),
+                'error' => $e->getMessage(),
             ]);
 
             return response()->json([
@@ -213,11 +157,6 @@ class SocialAuthController extends Controller
         $user = User::where('email', $socialUser->getEmail())->first();
 
         if ($user) {
-            Log::info('[OAuth] loginSocialUser: utilisateur existant trouvé', [
-                'user_id' => $user->id,
-                'had_provider_id' => (bool) $user->provider_id,
-            ]);
-
             // Lier le compte au provider s'il n'était pas déjà lié
             if (!$user->provider_id) {
                 $user->update([
@@ -226,25 +165,12 @@ class SocialAuthController extends Controller
                 ]);
             }
         } else {
-            Log::info('[OAuth] loginSocialUser: aucun utilisateur existant, création', [
-                'email' => $socialUser->getEmail(),
-            ]);
-
             $user = $this->createUserFromSocialData($socialUser, $provider);
         }
-
-        $sessionIdAvant = $request->session()->getId();
 
         // Connexion via la session (même guard que AuthController::login)
         Auth::guard('web')->login($user);
         $request->session()->regenerate();
-
-        Log::info('[OAuth] loginSocialUser: Auth::login + session()->regenerate() exécutés', [
-            'user_id' => $user->id,
-            'session_id_avant_regenerate' => $sessionIdAvant,
-            'session_id_apres_regenerate' => $request->session()->getId(),
-            'auth_check_immediat' => Auth::guard('web')->check(),
-        ]);
 
         return $user;
     }
@@ -286,11 +212,6 @@ class SocialAuthController extends Controller
 
         // L'email est déjà vérifié par le provider (Google/Facebook).
         $user->forceFill(['email_verified_at' => now()])->save();
-
-        Log::info('[OAuth] createUserFromSocialData: utilisateur créé', [
-            'user_id' => $user->id,
-            'username' => $username,
-        ]);
 
         return $user;
     }

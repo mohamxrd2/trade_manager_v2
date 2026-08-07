@@ -54,26 +54,7 @@ Route::get('/auth/{provider}/callback', [SocialAuthController::class, 'handlePro
 Route::post('/auth/{provider}/exchange', [SocialAuthController::class, 'exchangeCode']);
 
 // Protected routes (authentication required)
-// 'diag.log' est TEMPORAIRE — diagnostic des 502 en prod sur ces routes,
-// à retirer une fois la cause identifiée (voir app/Http/Middleware/LogApiDiagnostics.php)
-//
-// 'timing:...' et 'controller-timing' sont TEMPORAIRES — instrumentation
-// de diagnostic des requêtes >6s, voir App\Support\RequestTimer. Placés
-// ici (pas dans la pile globale de bootstrap/app.php) car auth:sanctum et
-// le dispatch du contrôleur ne concernent QUE les routes protégées —
-// 'controller-timing' DOIT rester en dernier dans ce tableau pour que sa
-// mesure ne couvre que la résolution de route + l'exécution du
-// contrôleur, rien d'autre. Grâce à l'héritage des groupes de routes
-// Laravel, cette instrumentation couvre aussi automatiquement le
-// sous-groupe 'company.ready' (factures) plus bas, sans avoir à la
-// dupliquer.
-Route::middleware([
-    'timing:SANCTUM,Avant auth-sanctum',
-    'auth:sanctum',
-    'timing:SANCTUM,Après auth-sanctum',
-    'diag.log',
-    'controller-timing',
-])->group(function () {
+Route::middleware(['auth:sanctum'])->group(function () {
     Route::post('/logout', [AuthController::class, 'logout']);
     Route::get('/user', [AuthController::class, 'user']);
     

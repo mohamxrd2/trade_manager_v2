@@ -2,7 +2,6 @@
 
 namespace App\Providers;
 
-use App\Support\RequestTimer;
 use Illuminate\Support\ServiceProvider;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -44,17 +43,6 @@ class DatabaseServiceProvider extends ServiceProvider
      */
     public function boot(): void
     {
-        // TEMPORAIRE — instrumentation de diagnostic des requêtes >6s, voir
-        // App\Support\RequestTimer. Ce provider boot avant le routing et
-        // les middlewares : les marks ci-dessous mesurent explicitement le
-        // coût de checkDatabaseAndConfigureSession(), qui ouvre une
-        // CONNEXION NEON RÉELLE (getPdo + SELECT 1) à ce stade — donc
-        // avant même que DatabaseConnectionMiddleware ne fasse, plus tard
-        // dans le pipeline, sa propre vérification de connexion. Mesure
-        // uniquement : le comportement n'est pas modifié ici.
-        $timer = $this->app->make(RequestTimer::class);
-        $timer->mark(RequestTimer::CAT_BOOTSTRAP, 'Entrée DatabaseServiceProvider::boot()');
-
         // Vérifier la connexion DB et configurer le fallback de session si nécessaire
         // Désactivé : ~880ms/requête (getPdo+SELECT 1 vers Neon), redondant avec
         // DatabaseConnectionMiddleware et les gestionnaires PDOException/QueryException
@@ -62,8 +50,6 @@ class DatabaseServiceProvider extends ServiceProvider
         // isDatabaseAvailable(), switchSessionToFile(), recheckDatabase() ou isDatabaseUp()
         // ailleurs dans le projet (vérifié) — voir historique git pour réactiver.
         // $this->checkDatabaseAndConfigureSession();
-
-        $timer->mark(RequestTimer::CAT_BOOTSTRAP, 'Sortie DatabaseServiceProvider::boot() (après checkDatabaseAndConfigureSession)');
     }
 
     /**
@@ -90,27 +76,12 @@ class DatabaseServiceProvider extends ServiceProvider
         $status->lastCheck = new \DateTime();
 
         try {
-            // TEMPORAIRE — isole précisément le temps d'établissement de la
-            // connexion PDO à Neon (handshake TCP+TLS+auth), séparément du
-            // temps d'exécution du SELECT 1 juste après.
-            $timer = $this->app->make(RequestTimer::class);
-
             // Timeout court pour la vérification initiale
             $connection = DB::connection();
-            $connectStart = microtime(true);
             $pdo = $connection->getPdo();
-            $timer->mark(RequestTimer::CAT_BOOTSTRAP, 'Connexion PDO à Neon établie (getPdo)', [
-                'connect_duration_ms' => round((microtime(true) - $connectStart) * 1000, 1),
-            ]);
 
             // Test simple pour vérifier que la connexion fonctionne.
-            // Appel PDO brut (pas DB::select) : DB::listen() ne le capte
-            // pas, donc chronomètre manuellement ici.
-            $queryStart = microtime(true);
             $pdo->query('SELECT 1');
-            $timer->mark(RequestTimer::CAT_BOOTSTRAP, 'SELECT 1 (vérification connexion) exécuté', [
-                'query_duration_ms' => round((microtime(true) - $queryStart) * 1000, 1),
-            ]);
 
             $status->available = true;
             $status->lastError = null;

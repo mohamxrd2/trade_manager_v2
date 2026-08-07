@@ -10,7 +10,6 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Validator;
 
 class TransactionController extends Controller
@@ -20,8 +19,6 @@ class TransactionController extends Controller
      */
     public function index(): JsonResponse
     {
-        Log::info('[DIAG] TransactionController::index: entrée', ['user_id' => Auth::id()]);
-
         try {
             $withSoldQuantity = function ($query) {
                 $query->withSum(['transactions' => function ($q) {
@@ -57,25 +54,12 @@ class TransactionController extends Controller
                 $transaction->variation?->article?->makeHidden('user');
             });
 
-            Log::info('[DIAG] TransactionController::index: succès', [
-                'user_id' => Auth::id(),
-                'count' => $transactions->count(),
-            ]);
-
             return response()->json([
                 'success' => true,
                 'message' => 'Transactions récupérées avec succès',
                 'data' => $transactions
             ]);
         } catch (\Throwable $e) {
-            Log::error('[DIAG] TransactionController::index: exception', [
-                'exception_class' => get_class($e),
-                'message' => $e->getMessage(),
-                'file' => $e->getFile(),
-                'line' => $e->getLine(),
-                'trace' => $e->getTraceAsString(),
-            ]);
-
             return response()->json([
                 'success' => false,
                 'message' => 'Erreur lors de la récupération des transactions',
