@@ -16,6 +16,83 @@ use Illuminate\Support\Facades\Validator;
 class TransactionController extends Controller
 {
     /**
+     * TEMPORAIRE — diagnostic ciblé de SQLSTATE[25P02] observé en prod sur
+     * store()/update()/destroy(), non reproductible localement malgré
+     * plusieurs tentatives (contrôleur direct, serveur HTTP local complet,
+     * session forgée). Capture chaque requête SQL exécutée pendant la
+     * méthode courante ; loguée UNIQUEMENT en cas d'échec (pas de bruit sur
+     * les succès), une petite ligne de log par requête (pas un seul gros
+     * bloc — un précédent test a montré qu'un message trop long peut être
+     * tronqué/perdu par le pipeline de logs). Objectif : voir la vraie
+     * première requête qui casse la transaction, pas seulement celle qui le
+     * révèle. À retirer une fois la cause trouvée.
+     */
+    private array $sqlTrace = [];
+
+    private function startSqlTrace(): void
+    {
+        $this->sqlTrace = [];
+        DB::listen(function ($query) {
+            $this->sqlTrace[] = [
+                'sql' => $query->sql,
+                'bindings' => $query->bindings,
+                'time_ms' => $query->time,
+            ];
+        });
+    }
+
+    private function dumpSqlTraceOnFailure(string $requestId): void
+    {
+        Log::error("[SQL-TRACE] {$requestId} — " . count($this->sqlTrace) . ' requête(s) exécutée(s) avant l\'échec');
+        foreach ($this->sqlTrace as $i => $q) {
+            Log::error(sprintf('[SQL-TRACE] %s — %d. [%sms] %s', $requestId, $i + 1, $q['time_ms'], $q['sql']), [
+                'bindings' => $q['bindings'],
+            ]);
+        }
+    }
+
+    /**
+     * Garde défensive avant toute DB::transaction() d'écriture : nettoie un
+     * état de transaction hérité (ex: connexion réutilisée par un proxy
+     * réseau qui rattache une session Postgres déjà "avortée" — SQLSTATE
+     * 25P02 observé en prod). ROLLBACK hors transaction est un no-op côté
+     * Postgres (simple avertissement), donc sans risque si tout est propre.
+     */
+    private function rollbackAnyOpenTransaction(): void
+    {
+        try {
+            DB::statement('ROLLBACK');
+        } catch (\Throwable $e) {
+            // Best-effort : une erreur ici ne doit jamais empêcher la vraie
+            // opération de continuer.
+        }
+    }
+
+    /**
+     * Précharge ce qu'il faut pour la réponse JSON d'une transaction "sale"
+     * (article + sa relation user.settings, nécessaire à
+     * Article::getLowStockAttribute() pour éviter son propre lazy load),
+     * puis retire l'objet User complet de la réponse — il a 8 accessors
+     * "appended" coûteux (plusieurs avec leur propre requête SQL), jamais
+     * voulus ici.
+     */
+    private function loadTransactionForResponse(Transaction $transaction): Transaction
+    {
+        $transaction->load([
+            'article' => function ($query) {
+                $query->withSum(['transactions' => function ($q) {
+                    $q->where('type', 'sale');
+                }], 'quantity');
+            },
+            'article.user.settings',
+            'variation',
+        ]);
+        $transaction->article?->makeHidden('user');
+
+        return $transaction;
+    }
+
+    /**
      * Display a listing of the transactions for the authenticated user.
      */
     public function index(): JsonResponse
@@ -110,6 +187,20 @@ class TransactionController extends Controller
      */
     public function store(Request $request): JsonResponse
     {
+        // TEMPORAIRE — vérifie si l'état d'authentification est fiable à
+        // l'entrée de cette méthode (piste : 401 intermittent observé sur
+        // /api/user juste avant). À retirer une fois la piste confirmée ou
+        // écartée.
+        Log::info('[AUTH-DIAG] TransactionController::store() entrée', [
+            'auth_id' => Auth::id(),
+            'auth_check' => Auth::check(),
+            'session_id' => $request->hasSession() ? $request->session()->getId() : null,
+            'has_session_cookie' => $request->hasCookie(config('session.cookie')),
+        ]);
+
+        $sqlTraceRequestId = (string) \Illuminate\Support\Str::uuid();
+        $this->startSqlTrace();
+
         try {
             $validator = Validator::make($request->all(), [
                 'type' => 'required|in:sale,expense',
@@ -132,7 +223,7 @@ class TransactionController extends Controller
             // Validation personnalisée pour variable_id selon le type d'article
             if ($request->type === 'sale' && $request->article_id) {
                 $article = Article::find($request->article_id);
-                
+
                 if ($article) {
                     if ($article->type === 'variable' && !$request->variable_id) {
                         return response()->json([
@@ -140,7 +231,7 @@ class TransactionController extends Controller
                             'message' => 'Pour un article variable, variable_id est obligatoire'
                         ], 422);
                     }
-                    
+
                     if ($article->type === 'simple' && $request->variable_id) {
                         return response()->json([
                             'success' => false,
@@ -150,6 +241,8 @@ class TransactionController extends Controller
                 }
             }
 
+            $this->rollbackAnyOpenTransaction();
+
             return DB::transaction(function () use ($request) {
                 $transactionData = [
                     'user_id' => Auth::id(),
@@ -158,8 +251,14 @@ class TransactionController extends Controller
 
                 if ($request->type === 'sale') {
                     // Vérifier que l'article existe et appartient à l'utilisateur
+                    // withSum précalcule transactions_sum_quantity : évite que le
+                    // ->remaining_quantity plus bas (accessor Article::getSoldQuantityAttribute)
+                    // ne déclenche sa propre requête SUM() ad hoc.
                     $article = Article::where('id', $request->article_id)
                         ->where('user_id', Auth::id())
+                        ->withSum(['transactions' => function ($q) {
+                            $q->where('type', 'sale');
+                        }], 'quantity')
                         ->first();
 
                     if (!$article) {
@@ -208,7 +307,7 @@ class TransactionController extends Controller
 
                     // Gestion du prix de vente
                     $salePrice = $request->sale_price ?? $article->sale_price;
-                    
+
                     // Calculer le montant automatiquement
                     $amount = $salePrice * $request->quantity;
                     $transactionData['amount'] = $amount;
@@ -240,11 +339,7 @@ class TransactionController extends Controller
                     return response()->json([
                         'success' => true,
                         'message' => 'Vente enregistrée avec succès',
-                        'data' => $transaction->load(['article' => function ($query) {
-                            $query->withSum(['transactions' => function ($q) {
-                                $q->where('type', 'sale');
-                            }], 'quantity');
-                        }, 'variation'])
+                        'data' => $this->loadTransactionForResponse($transaction)
                     ], 201);
 
                 } else { // type === 'expense'
@@ -273,6 +368,7 @@ class TransactionController extends Controller
                 'line' => $e->getLine(),
                 'trace' => $e->getTraceAsString(),
             ]);
+            $this->dumpSqlTraceOnFailure($sqlTraceRequestId);
 
             return response()->json([
                 'success' => false,
@@ -287,6 +383,9 @@ class TransactionController extends Controller
      */
     public function update(Request $request, string $id): JsonResponse
     {
+        $sqlTraceRequestId = (string) \Illuminate\Support\Str::uuid();
+        $this->startSqlTrace();
+
         try {
             $transaction = Transaction::where('id', $id)
                 ->where('user_id', Auth::id())
@@ -323,10 +422,12 @@ class TransactionController extends Controller
                 ], 422);
             }
 
+            $this->rollbackAnyOpenTransaction();
+
             return DB::transaction(function () use ($request, $transaction) {
                 if ($transaction->type === 'sale') {
                     $article = $transaction->article;
-                    
+
                     if (!$article) {
                         return response()->json([
                             'success' => false,
@@ -348,7 +449,7 @@ class TransactionController extends Controller
                             ->where('type', 'sale')
                             ->where('id', '!=', $transaction->id)
                             ->sum('quantity');
-                        
+
                         $availableQuantity = $article->quantity - $otherSoldQuantity;
 
                         // Vérifier que la nouvelle quantité est disponible
@@ -387,26 +488,31 @@ class TransactionController extends Controller
                 } else { // type === 'expense'
                     // Pour une dépense, on peut modifier name et/ou amount
                     $updateData = ['name' => $request->name];
-                    
+
                     if ($request->has('amount')) {
                         $updateData['amount'] = $request->amount;
                     }
-                    
+
                     $transaction->update($updateData);
                 }
 
                 return response()->json([
                     'success' => true,
                     'message' => 'Transaction modifiée avec succès',
-                    'data' => $transaction->load(['article' => function ($query) {
-                        $query->withSum(['transactions' => function ($q) {
-                            $q->where('type', 'sale');
-                        }], 'quantity');
-                    }, 'variation'])
+                    'data' => $this->loadTransactionForResponse($transaction)
                 ]);
             });
 
         } catch (\Exception $e) {
+            Log::error('Erreur lors de la modification de la transaction', [
+                'exception_class' => get_class($e),
+                'message' => $e->getMessage(),
+                'file' => $e->getFile(),
+                'line' => $e->getLine(),
+                'trace' => $e->getTraceAsString(),
+            ]);
+            $this->dumpSqlTraceOnFailure($sqlTraceRequestId);
+
             return response()->json([
                 'success' => false,
                 'message' => 'Erreur lors de la modification de la transaction',
@@ -420,6 +526,9 @@ class TransactionController extends Controller
      */
     public function destroy(string $id): JsonResponse
     {
+        $sqlTraceRequestId = (string) \Illuminate\Support\Str::uuid();
+        $this->startSqlTrace();
+
         try {
             $transaction = Transaction::where('id', $id)
                 ->where('user_id', Auth::id())
@@ -431,6 +540,8 @@ class TransactionController extends Controller
                     'message' => 'Transaction non trouvée'
                 ], 404);
             }
+
+            $this->rollbackAnyOpenTransaction();
 
             return DB::transaction(function () use ($transaction) {
                 // Si c'est une vente, restaurer la quantité de l'article
@@ -447,6 +558,15 @@ class TransactionController extends Controller
             });
 
         } catch (\Exception $e) {
+            Log::error('Erreur lors de la suppression de la transaction', [
+                'exception_class' => get_class($e),
+                'message' => $e->getMessage(),
+                'file' => $e->getFile(),
+                'line' => $e->getLine(),
+                'trace' => $e->getTraceAsString(),
+            ]);
+            $this->dumpSqlTraceOnFailure($sqlTraceRequestId);
+
             return response()->json([
                 'success' => false,
                 'message' => 'Erreur lors de la suppression de la transaction',
