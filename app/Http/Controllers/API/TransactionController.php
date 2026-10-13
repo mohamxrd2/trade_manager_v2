@@ -16,42 +16,6 @@ use Illuminate\Support\Facades\Validator;
 class TransactionController extends Controller
 {
     /**
-     * TEMPORAIRE — diagnostic ciblé de SQLSTATE[25P02] observé en prod sur
-     * store()/update()/destroy(), non reproductible localement malgré
-     * plusieurs tentatives (contrôleur direct, serveur HTTP local complet,
-     * session forgée). Capture chaque requête SQL exécutée pendant la
-     * méthode courante ; loguée UNIQUEMENT en cas d'échec (pas de bruit sur
-     * les succès), une petite ligne de log par requête (pas un seul gros
-     * bloc — un précédent test a montré qu'un message trop long peut être
-     * tronqué/perdu par le pipeline de logs). Objectif : voir la vraie
-     * première requête qui casse la transaction, pas seulement celle qui le
-     * révèle. À retirer une fois la cause trouvée.
-     */
-    private array $sqlTrace = [];
-
-    private function startSqlTrace(): void
-    {
-        $this->sqlTrace = [];
-        DB::listen(function ($query) {
-            $this->sqlTrace[] = [
-                'sql' => $query->sql,
-                'bindings' => $query->bindings,
-                'time_ms' => $query->time,
-            ];
-        });
-    }
-
-    private function dumpSqlTraceOnFailure(string $requestId): void
-    {
-        Log::error("[SQL-TRACE] {$requestId} — " . count($this->sqlTrace) . ' requête(s) exécutée(s) avant l\'échec');
-        foreach ($this->sqlTrace as $i => $q) {
-            Log::error(sprintf('[SQL-TRACE] %s — %d. [%sms] %s', $requestId, $i + 1, $q['time_ms'], $q['sql']), [
-                'bindings' => $q['bindings'],
-            ]);
-        }
-    }
-
-    /**
      * Garde défensive avant toute DB::transaction() d'écriture : nettoie un
      * état de transaction hérité (ex: connexion réutilisée par un proxy
      * réseau qui rattache une session Postgres déjà "avortée" — SQLSTATE
@@ -235,20 +199,6 @@ class TransactionController extends Controller
      */
     public function store(Request $request): JsonResponse
     {
-        // TEMPORAIRE — vérifie si l'état d'authentification est fiable à
-        // l'entrée de cette méthode (piste : 401 intermittent observé sur
-        // /api/user juste avant). À retirer une fois la piste confirmée ou
-        // écartée.
-        Log::info('[AUTH-DIAG] TransactionController::store() entrée', [
-            'auth_id' => Auth::id(),
-            'auth_check' => Auth::check(),
-            'session_id' => $request->hasSession() ? $request->session()->getId() : null,
-            'has_session_cookie' => $request->hasCookie(config('session.cookie')),
-        ]);
-
-        $sqlTraceRequestId = (string) \Illuminate\Support\Str::uuid();
-        $this->startSqlTrace();
-
         try {
             $validator = Validator::make($request->all(), [
                 'type' => 'required|in:sale,expense',
@@ -497,7 +447,6 @@ class TransactionController extends Controller
                 'line' => $e->getLine(),
                 'trace' => $e->getTraceAsString(),
             ]);
-            $this->dumpSqlTraceOnFailure($sqlTraceRequestId);
 
             return response()->json([
                 'success' => false,
@@ -512,9 +461,6 @@ class TransactionController extends Controller
      */
     public function update(Request $request, string $id): JsonResponse
     {
-        $sqlTraceRequestId = (string) \Illuminate\Support\Str::uuid();
-        $this->startSqlTrace();
-
         try {
             $transaction = Transaction::where('id', $id)
                 ->where('user_id', Auth::id())
@@ -640,7 +586,6 @@ class TransactionController extends Controller
                 'line' => $e->getLine(),
                 'trace' => $e->getTraceAsString(),
             ]);
-            $this->dumpSqlTraceOnFailure($sqlTraceRequestId);
 
             return response()->json([
                 'success' => false,
@@ -655,9 +600,6 @@ class TransactionController extends Controller
      */
     public function destroy(string $id): JsonResponse
     {
-        $sqlTraceRequestId = (string) \Illuminate\Support\Str::uuid();
-        $this->startSqlTrace();
-
         try {
             $transaction = Transaction::where('id', $id)
                 ->where('user_id', Auth::id())
@@ -694,7 +636,6 @@ class TransactionController extends Controller
                 'line' => $e->getLine(),
                 'trace' => $e->getTraceAsString(),
             ]);
-            $this->dumpSqlTraceOnFailure($sqlTraceRequestId);
 
             return response()->json([
                 'success' => false,
