@@ -90,6 +90,11 @@ return [
         'Origin',
         'Cache-Control',
         'Pragma',
+        // Clé d'idempotence envoyée par le frontend sur POST /api/transactions
+        // (voir TransactionController::store()) — absente d'ici, le préflight
+        // CORS la refuse et le navigateur bloque la requête réelle avant même
+        // qu'elle n'atteigne Laravel (vu côté client comme "Network Error").
+        'Idempotency-Key',
     ],
 
     /*
