@@ -8,6 +8,15 @@ return new class extends Migration
 {
     /**
      * Run the migrations.
+     *
+     * Ajoute uniquement la colonne, dans sa propre transaction Laravel. La
+     * contrainte unique vit dans la migration suivante (2026_10_12_000001) :
+     * deux déploiements ont échoué sur Neon avec SQLSTATE[25P02] portant
+     * précisément sur cette contrainte alors que la migration entière rejoue
+     * sans erreur sur PostgreSQL 18.6 identique en local — isoler chaque
+     * ALTER TABLE dans sa propre transaction évite qu'un incident transitoire
+     * sur l'une fasse échouer l'autre en cascade, et rend visible dans
+     * migrate:status laquelle échoue réellement si le problème se reproduit.
      */
     public function up(): void
     {
@@ -19,14 +28,6 @@ return new class extends Migration
             // clé (anciens clients, outils, autres intégrations) continuent de
             // fonctionner sans déduplication.
             $table->string('idempotency_key')->nullable()->after('type');
-
-            // Unique par utilisateur (et non globalement) : deux utilisateurs
-            // différents pourraient en théorie générer la même valeur côté
-            // client sans que ça pose problème. NULL est traité comme distinct
-            // de toute autre valeur par Postgres (et SQLite) pour une
-            // contrainte UNIQUE : un nombre arbitraire de lignes avec
-            // idempotency_key NULL est donc autorisé pour un même utilisateur.
-            $table->unique(['user_id', 'idempotency_key'], 'transactions_user_id_idempotency_key_unique');
         });
     }
 
@@ -36,7 +37,6 @@ return new class extends Migration
     public function down(): void
     {
         Schema::table('transactions', function (Blueprint $table) {
-            $table->dropUnique('transactions_user_id_idempotency_key_unique');
             $table->dropColumn('idempotency_key');
         });
     }
