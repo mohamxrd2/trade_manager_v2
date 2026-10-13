@@ -69,6 +69,54 @@ class TransactionController extends Controller
     }
 
     /**
+     * Recherche une transaction déjà créée par CET utilisateur avec cette
+     * clé d'idempotence exacte. Contrairement à l'ancienne heuristique par
+     * ressemblance de champs (fenêtre de temps + mêmes valeurs), une clé
+     * d'idempotence ne produit jamais de faux positif : deux soumissions
+     * distinctes de l'utilisateur ont toujours des clés différentes, même
+     * si leurs champs métier sont identiques (ex: deux ventes du même
+     * article à quelques secondes d'intervalle restent deux transactions).
+     * Seuls les retries automatiques d'UNE MÊME soumission (même clé,
+     * générée une fois côté client et conservée pour toutes ses tentatives)
+     * sont détectés ici.
+     */
+    private function findTransactionByIdempotencyKey(string $idempotencyKey): ?Transaction
+    {
+        return Transaction::where('user_id', Auth::id())
+            ->where('idempotency_key', $idempotencyKey)
+            ->first();
+    }
+
+    /**
+     * Détermine si une QueryException correspond précisément à une violation
+     * de la contrainte unique (user_id, idempotency_key) — c'est-à-dire une
+     * course entre deux écritures concurrentes d'UNE MÊME soumission (la
+     * vérification préalable n'avait rien trouvé, mais une autre requête a
+     * créé la ligne entre-temps). Isolée dans sa propre méthode pour être
+     * testable indépendamment d'une vraie violation de contrainte en base.
+     *
+     * Volontairement conservateur : exige à la fois un code SQLSTATE
+     * d'intégrité ET la présence du nom de colonne dans le message, pour ne
+     * jamais absorber une QueryException sans rapport (perte de connexion,
+     * autre contrainte) qui doit continuer à remonter en erreur 500.
+     */
+    private function isIdempotencyKeyConflict(\Illuminate\Database\QueryException $e, ?string $idempotencyKey): bool
+    {
+        if ($idempotencyKey === null) {
+            return false;
+        }
+
+        // (string) : PDO/QueryException::getCode() renvoie parfois un int,
+        // parfois une string selon le driver (observé : int sous SQLite,
+        // string "23505" sous Postgres) — comparaison stricte normalisée
+        // pour ne pas dépendre de ce détail.
+        $sqlStateIndicatesIntegrityViolation = in_array((string) $e->getCode(), ['23505', '23000'], true);
+
+        return $sqlStateIndicatesIntegrityViolation
+            && str_contains($e->getMessage(), 'idempotency_key');
+    }
+
+    /**
      * Précharge ce qu'il faut pour la réponse JSON d'une transaction "sale"
      * (article + sa relation user.settings, nécessaire à
      * Article::getLowStockAttribute() pour éviter son propre lazy load),
@@ -243,10 +291,48 @@ class TransactionController extends Controller
 
             $this->rollbackAnyOpenTransaction();
 
-            return DB::transaction(function () use ($request) {
+            // Clé d'idempotence optionnelle (en-tête HTTP, générée côté
+            // client une fois par soumission et conservée pour tous les
+            // retries automatiques de cette même soumission). Absente :
+            // comportement strictement inchangé (pas de déduplication),
+            // pour rester compatible avec tout client qui ne l'envoie pas.
+            $idempotencyKey = $request->header('Idempotency-Key');
+
+            if ($idempotencyKey !== null && !\Illuminate\Support\Str::isUuid($idempotencyKey)) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'En-tête Idempotency-Key invalide (UUID attendu)'
+                ], 422);
+            }
+
+            if ($idempotencyKey !== null) {
+                $existing = $this->findTransactionByIdempotencyKey($idempotencyKey);
+
+                if ($existing) {
+                    Log::info('Idempotency-Key déjà traitée : transaction existante renvoyée sans réexécuter les effets métier (stock, notifications)', [
+                        'user_id' => Auth::id(),
+                        'idempotency_key' => $idempotencyKey,
+                        'existing_transaction_id' => $existing->id,
+                    ]);
+
+                    return response()->json([
+                        'success' => true,
+                        'message' => $existing->type === 'sale'
+                            ? 'Vente enregistrée avec succès'
+                            : 'Dépense enregistrée avec succès',
+                        'data' => $existing->type === 'sale'
+                            ? $this->loadTransactionForResponse($existing)
+                            : $existing,
+                    ], 201);
+                }
+            }
+
+            try {
+                return DB::transaction(function () use ($request, $idempotencyKey) {
                 $transactionData = [
                     'user_id' => Auth::id(),
                     'type' => $request->type,
+                    'idempotency_key' => $idempotencyKey,
                 ];
 
                 if ($request->type === 'sale') {
@@ -358,7 +444,50 @@ class TransactionController extends Controller
                         'data' => $transaction
                     ], 201);
                 }
-            });
+                });
+            } catch (\Illuminate\Database\QueryException $e) {
+                // Course entre deux tentatives quasi simultanées d'UNE MÊME
+                // soumission (même Idempotency-Key) : la vérification
+                // ci-dessus n'avait rien trouvé, mais une autre requête
+                // concurrente a créé la ligne entre-temps et notre propre
+                // INSERT vient de violer la contrainte unique
+                // (user_id, idempotency_key). On ne traite ce cas comme un
+                // doublon que si une clé était bien fournie ET que le message
+                // confirme explicitement cette contrainte précise — toute
+                // autre QueryException (contrainte différente, perte de
+                // connexion, etc.) continue de remonter normalement vers le
+                // catch générique ci-dessous (réponse 500 inchangée).
+                if (!$this->isIdempotencyKeyConflict($e, $idempotencyKey)) {
+                    throw $e;
+                }
+
+                $existing = $this->findTransactionByIdempotencyKey($idempotencyKey);
+
+                if (!$existing) {
+                    // Ne devrait jamais arriver : la violation de contrainte
+                    // prouve qu'une ligne avec cette clé existe. Si on ne la
+                    // retrouve pas (suppression concurrente improbable), on
+                    // laisse remonter au catch générique plutôt que de
+                    // renvoyer un faux succès sans données.
+                    throw $e;
+                }
+
+                Log::warning('Conflit d\'idempotence détecté à l\'écriture (requêtes concurrentes) : transaction existante renvoyée sans réexécuter les effets métier', [
+                    'user_id' => Auth::id(),
+                    'idempotency_key' => $idempotencyKey,
+                    'existing_transaction_id' => $existing->id,
+                ]);
+
+                return response()->json([
+                    'success' => true,
+                    'message' => $existing->type === 'sale'
+                        ? 'Vente enregistrée avec succès'
+                        : 'Dépense enregistrée avec succès',
+                    'data' => $existing->type === 'sale'
+                        ? $this->loadTransactionForResponse($existing)
+                        : $existing,
+                ], 201);
+            }
 
         } catch (\Exception $e) {
             Log::error('Erreur lors de la création de la transaction', [

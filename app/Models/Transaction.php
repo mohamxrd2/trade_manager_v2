@@ -26,6 +26,7 @@ class Transaction extends Model
         'amount',
         'sale_price',
         'type',
+        'idempotency_key',
     ];
 
     /**
