@@ -103,18 +103,25 @@ return [
                 PDO::ATTR_TIMEOUT => (int) env('DB_TIMEOUT', 5), // Timeout de connexion en secondes
                 PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
                 PDO::ATTR_PERSISTENT => (bool) env('DB_PERSISTENT', true), // Connexion persistante
-                // Désactive les prepared statements natifs côté serveur (PDO
-                // utilise sinon PREPARE/EXECUTE nommés par défaut avec pgsql).
-                // Un prepared statement natif est lié à une connexion backend
-                // physique précise ; un proxy qui réassigne silencieusement
-                // le backend entre deux requêtes d'une même session perçue
-                // continue côté client (comportement observé en production
-                // sur Neon, jamais reproduit sur un PostgreSQL direct en
-                // local) peut alors faire échouer l'EXECUTE suivant. Forcer
-                // l'émulation envoie du SQL littéral via le protocole simple,
-                // ce qui ne dépend plus de la persistance d'un handle de
-                // prepared statement sur un backend particulier.
-                PDO::ATTR_EMULATE_PREPARES => (bool) env('DB_EMULATE_PREPARES', true),
+                // Remplace PDO::ATTR_EMULATE_PREPARES (48e77ac), qui
+                // substituait les paramètres en littéraux SQL non typés et a
+                // cassé les comparaisons sur notifications.read (boolean
+                // Postgres natif, SQLSTATE[42883] : "operator does not
+                // exist: boolean = integer") — reproduit et confirmé en
+                // local. Cette option-ci désactive uniquement le NOMMAGE du
+                // prepared statement côté serveur (exécution anonyme,
+                // reparsée à chaque fois) tout en conservant le protocole
+                // étendu typé : les paramètres restent correctement typés,
+                // donc les comparaisons booléennes fonctionnent (vérifié en
+                // local). Objectif inchangé par rapport à 48e77ac :
+                // l'hypothèse (non prouvée) est qu'un prepared statement
+                // nommé reste lié à une connexion backend physique précise,
+                // ce qui poserait problème si un proxy en réassigne une
+                // autre en cours de session côté client — comportement
+                // observé en production sur Neon (SQLSTATE[25P02]), jamais
+                // reproduit sur un PostgreSQL direct en local. Seul un
+                // déploiement réel confirme ou infirme cette hypothèse.
+                PDO::PGSQL_ATTR_DISABLE_PREPARES => (bool) env('DB_PGSQL_DISABLE_PREPARES', true),
             ],
         ],
 
