@@ -103,6 +103,18 @@ return [
                 PDO::ATTR_TIMEOUT => (int) env('DB_TIMEOUT', 5), // Timeout de connexion en secondes
                 PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
                 PDO::ATTR_PERSISTENT => (bool) env('DB_PERSISTENT', true), // Connexion persistante
+                // Désactive les prepared statements natifs côté serveur (PDO
+                // utilise sinon PREPARE/EXECUTE nommés par défaut avec pgsql).
+                // Un prepared statement natif est lié à une connexion backend
+                // physique précise ; un proxy qui réassigne silencieusement
+                // le backend entre deux requêtes d'une même session perçue
+                // continue côté client (comportement observé en production
+                // sur Neon, jamais reproduit sur un PostgreSQL direct en
+                // local) peut alors faire échouer l'EXECUTE suivant. Forcer
+                // l'émulation envoie du SQL littéral via le protocole simple,
+                // ce qui ne dépend plus de la persistance d'un handle de
+                // prepared statement sur un backend particulier.
+                PDO::ATTR_EMULATE_PREPARES => (bool) env('DB_EMULATE_PREPARES', true),
             ],
         ],
 
