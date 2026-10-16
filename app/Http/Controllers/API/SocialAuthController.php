@@ -40,11 +40,23 @@ class SocialAuthController extends Controller
 
         $driver = Socialite::driver($provider)->stateless();
 
-        // Force l'écran de sélection de compte Google, sinon un utilisateur
-        // déjà connecté à Google dans son navigateur est reconnecté
-        // automatiquement avec ce compte sans pouvoir en choisir un autre.
         if ($provider === 'google') {
-            $driver = $driver->with(['prompt' => 'select_account']);
+            // select_account : affiche toujours la liste des comptes (sinon un
+            // utilisateur déjà connecté à Google est reconnecté automatiquement
+            // avec ce compte sans pouvoir en choisir un autre).
+            // consent : réaffiche systématiquement l'écran « Continuer vers
+            // Waelly », même quand l'app a déjà été autorisée par le passé —
+            // sans ce paramètre, Google saute cet écran dès la 2e connexion.
+            $driver = $driver->with([
+                'prompt' => 'select_account consent',
+                'access_type' => 'offline',
+            ]);
+        }
+
+        if ($provider === 'facebook') {
+            // Équivalent Facebook de `consent` : réaffiche toujours l'écran
+            // « Continuer en tant que … » plutôt que de reconnecter en silence.
+            $driver = $driver->with(['auth_type' => 'rerequest']);
         }
 
         return $driver->redirect();

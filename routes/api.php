@@ -34,7 +34,7 @@ use Illuminate\Support\Facades\Route;
 Route::post('/register', [AuthController::class, 'register'])->middleware('throttle:6,1');
 Route::post('/register/verify', [AuthController::class, 'verifyRegistration'])->middleware('throttle:10,1');
 Route::post('/register/resend-code', [AuthController::class, 'resendRegistrationCode'])->middleware('throttle:3,1');
-Route::post('/login', [AuthController::class, 'login']);
+Route::post('/login', [AuthController::class, 'login'])->middleware('throttle:8,1');
 
 // Health check route - Pour vérifier que le serveur est actif
 Route::get('/health', [HealthController::class, 'check']);
@@ -95,6 +95,7 @@ Route::middleware(['auth:sanctum'])->group(function () {
     // Onboarding routes (legacy)
     Route::get('/onboarding/check', [OnboardingController::class, 'check']);
     Route::post('/onboarding/complete', [OnboardingController::class, 'complete']);
+    Route::post('/onboarding/skip', [OnboardingController::class, 'skip']);
     
     // =========================================================================
     // COMPANY / ENTREPRISE

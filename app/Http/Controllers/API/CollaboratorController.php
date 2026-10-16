@@ -5,6 +5,7 @@ namespace App\Http\Controllers\API;
 use App\Http\Controllers\Controller;
 use App\Models\Collaborator;
 use App\Models\User;
+use App\Services\NotificationService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
@@ -99,9 +100,11 @@ class CollaboratorController extends Controller
 
                 // Recharger le collaborateur avec la relation user pour calculer le wallet
                 $collaborator->load('user');
-                
+
                 // Forcer le calcul du wallet en accédant à l'accesseur
                 $collaborator->wallet = $collaborator->wallet;
+
+                NotificationService::notifyTeamJoined($collaborator);
 
                 return response()->json([
                     'success' => true,

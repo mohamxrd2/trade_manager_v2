@@ -71,7 +71,7 @@ class AuthController extends Controller
     }
 
     /**
-     * Step 2 de l'inscription : vérifie le code à 5 chiffres et crée
+     * Step 2 de l'inscription : vérifie le code à 6 chiffres et crée
      * réellement le compte si tout correspond.
      */
     public function verifyRegistration(Request $request): JsonResponse
@@ -208,11 +208,11 @@ class AuthController extends Controller
     }
 
     /**
-     * Génère un code de vérification à 5 chiffres (avec zéros non significatifs).
+     * Génère un code de vérification à 6 chiffres (avec zéros non significatifs).
      */
     private function generateCode(): string
     {
-        return str_pad((string) random_int(0, 99999), 5, '0', STR_PAD_LEFT);
+        return str_pad((string) random_int(0, 999999), 6, '0', STR_PAD_LEFT);
     }
 
     /**

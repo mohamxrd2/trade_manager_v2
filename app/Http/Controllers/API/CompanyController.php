@@ -230,15 +230,16 @@ class CompanyController extends Controller
             $user = Auth::user();
             $company = $user->company;
 
+            // Première sauvegarde (onboarding, étape 2) : pas encore de ligne
+            // Company pour cet utilisateur — on la crée au lieu de 404, pour
+            // que ce même endpoint serve aussi bien la création initiale que
+            // les modifications ultérieures depuis Paramètres > Entreprise.
             if (!$company) {
-                return response()->json([
-                    'success' => false,
-                    'message' => 'Aucune entreprise associée à votre compte'
-                ], 404);
+                $company = new \App\Models\Company(['user_id' => $user->id]);
             }
 
             $validator = Validator::make($request->all(), [
-                'name' => 'sometimes|required|string|max:255',
+                'name' => $company->exists ? 'sometimes|required|string|max:255' : 'required|string|max:255',
                 'email' => 'sometimes|nullable|email|max:255',
                 'sector' => 'sometimes|nullable|string|max:255',
                 'headquarters' => 'sometimes|nullable|string|max:500',
@@ -261,6 +262,22 @@ class CompanyController extends Controller
                 ], 422);
             }
 
+            // Mettre à jour les autres champs
+            $fields = ['name', 'email', 'sector', 'headquarters', 'legal_status', 'bank_account_number'];
+            foreach ($fields as $field) {
+                if ($request->has($field)) {
+                    $company->$field = $request->$field;
+                }
+            }
+
+            // Sauvegarder D'ABORD si la ligne n'existe pas encore : l'UUID
+            // (HasUuids) n'est attribué qu'au moment du INSERT, donc utiliser
+            // $company->id dans le nom de fichier du logo ci-dessous
+            // produirait un segment vide tant que la ligne n'est pas créée.
+            if (!$company->exists) {
+                $company->save();
+            }
+
             // Traiter l'upload du logo si présent
             if ($request->hasFile('logo')) {
                 // Supprimer l'ancien logo s'il existe
@@ -272,14 +289,6 @@ class CompanyController extends Controller
                 $filename = 'company_' . $company->id . '_' . time() . '.' . $file->getClientOriginalExtension();
                 $path = $file->storeAs('company-logos', $filename, 'public');
                 $company->logo = $path;
-            }
-
-            // Mettre à jour les autres champs
-            $fields = ['name', 'email', 'sector', 'headquarters', 'legal_status', 'bank_account_number'];
-            foreach ($fields as $field) {
-                if ($request->has($field)) {
-                    $company->$field = $request->$field;
-                }
             }
 
             $company->save();

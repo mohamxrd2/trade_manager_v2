@@ -9,6 +9,7 @@ use App\Models\Client;
 use App\Models\Invoice;
 use App\Models\InvoiceItem;
 use App\Models\Transaction;
+use App\Services\NotificationService;
 use Barryvdh\DomPDF\Facade\Pdf;
 use Illuminate\Database\QueryException;
 use Illuminate\Http\JsonResponse;
@@ -729,6 +730,12 @@ class InvoiceController extends Controller
 
                     $invoice->update($updateData);
                 });
+
+                if ($newStatus === 'paid' && $oldStatus !== 'paid') {
+                    NotificationService::notifyInvoicePaid($invoice);
+                } elseif ($newStatus === 'overdue' && $oldStatus !== 'overdue') {
+                    NotificationService::notifyInvoiceOverdue($invoice);
+                }
             } catch (InsufficientStockException $e) {
                 return response()->json([
                     'success' => false,

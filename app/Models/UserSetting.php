@@ -21,6 +21,10 @@ class UserSetting extends Model
         'currency',
         'low_stock_threshold',
         'language',
+        'notify_stock_low',
+        'notify_invoice_paid',
+        'notify_invoice_overdue',
+        'notify_team_joined',
     ];
 
     /**
@@ -30,6 +34,10 @@ class UserSetting extends Model
      */
     protected $casts = [
         'low_stock_threshold' => 'integer',
+        'notify_stock_low' => 'boolean',
+        'notify_invoice_paid' => 'boolean',
+        'notify_invoice_overdue' => 'boolean',
+        'notify_team_joined' => 'boolean',
     ];
 
     /**
