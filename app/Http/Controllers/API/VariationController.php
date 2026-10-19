@@ -4,6 +4,8 @@ namespace App\Http\Controllers\API;
 
 use App\Http\Controllers\Controller;
 use App\Models\Article;
+use App\Models\InvoiceItem;
+use App\Models\Transaction;
 use App\Models\Variation;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -97,6 +99,8 @@ class VariationController extends Controller
                 'article_id' => 'required|string|exists:articles,id',
                 'name' => 'required|string|max:255',
                 'quantity' => 'required|integer|min:0',
+                'price' => 'required|numeric|min:0.01',
+                'cost_price' => 'nullable|numeric|min:0',
                 'image' => 'nullable|string|max:255',
             ],[
                 'article_id.required' => 'L\'article est obligatoire',
@@ -108,6 +112,9 @@ class VariationController extends Controller
                 'quantity.required' => 'La quantité est obligatoire',
                 'quantity.integer' => 'La quantité doit être un nombre entier',
                 'quantity.min' => 'La quantité doit être supérieure ou égale à 0',
+                'price.required' => 'Le prix de la variation est obligatoire',
+                'price.numeric' => 'Le prix doit être un nombre',
+                'price.min' => 'Le prix doit être supérieur à 0',
                 'image.string' => 'L\'image doit être une chaîne de caractères',
                 'image.max' => 'Le nom de l\'image ne peut pas dépasser 255 caractères',
             ]);
@@ -140,9 +147,12 @@ class VariationController extends Controller
                 ], 400);
             }
 
-            // Vérifier si une variation avec le même nom existe déjà pour cet article
+            // Vérifier si une variation avec le même nom (insensible à la casse et aux
+            // espaces) existe déjà pour cet article — reflète l'index unique partiel
+            // (article_id, lower(trim(name))) WHERE deleted_at IS NULL.
+            $normalizedName = mb_strtolower(trim($request->name));
             $existingVariation = Variation::where('article_id', $request->article_id)
-                ->where('name', $request->name)
+                ->whereRaw('lower(trim(name)) = ?', [$normalizedName])
                 ->first();
 
             if ($existingVariation) {
@@ -152,31 +162,16 @@ class VariationController extends Controller
                 ], 400);
             }
 
-            // Vérifier que la quantité de la variation est positive
-            if ($request->quantity <= 0) {
-                return response()->json([
-                    'success' => false,
-                    'message' => 'La quantité de la variation doit être positive'
-                ], 400);
-            }
-
-            // Calculer la somme des quantités des variations existantes pour cet article
-            $totalVariationsQuantity = Variation::where('article_id', $request->article_id)
-                ->sum('quantity');
-
-            // Vérifier que la somme des quantités des variations (existantes + nouvelle) ne dépasse pas la quantité totale de l'article
-            if ($totalVariationsQuantity + $request->quantity > $article->quantity) {
-                $availableQuantity = $article->quantity - $totalVariationsQuantity;
-                return response()->json([
-                    'success' => false,
-                    'message' => 'La somme des quantités des variations ne peut pas dépasser la quantité totale de l\'article. Quantité disponible pour les variations: ' . $availableQuantity
-                ], 400);
-            }
-
+            // Pas de plafond lié à article.quantity : une variation peut être
+            // ajoutée à tout moment, sans limite liée à une "quantité initiale"
+            // de l'article (ce plafond est supprimé — l'article.quantity est
+            // désormais un cache calculé, pas une borne).
             $variation = Variation::create([
                 'article_id' => $request->article_id,
-                'name' => $request->name,
+                'name' => trim($request->name),
                 'quantity' => $request->quantity,
+                'price' => $request->price,
+                'cost_price' => $request->cost_price,
                 'image' => $request->image,
             ]);
 
@@ -228,7 +223,13 @@ class VariationController extends Controller
             $validator = Validator::make($request->all(), [
                 'name' => 'required|string|max:255',
                 'quantity' => 'required|integer|min:0',
+                'price' => 'required|numeric|min:0.01',
+                'cost_price' => 'nullable|numeric|min:0',
                 'image' => 'nullable|string|max:255',
+            ], [
+                'price.required' => 'Le prix de la variation est obligatoire',
+                'price.numeric' => 'Le prix doit être un nombre',
+                'price.min' => 'Le prix doit être supérieur à 0',
             ]);
 
             if ($validator->fails()) {
@@ -239,9 +240,11 @@ class VariationController extends Controller
                 ], 422);
             }
 
-            // Vérifier si une autre variation avec le même nom existe déjà pour cet article
+            // Vérifier si une autre variation avec le même nom (insensible à la casse
+            // et aux espaces) existe déjà pour cet article
+            $normalizedName = mb_strtolower(trim($request->name));
             $existingVariation = Variation::where('article_id', $variation->article_id)
-                ->where('name', $request->name)
+                ->whereRaw('lower(trim(name)) = ?', [$normalizedName])
                 ->where('id', '!=', $id)
                 ->first();
 
@@ -252,31 +255,12 @@ class VariationController extends Controller
                 ], 400);
             }
 
-            // Vérifier que la quantité de la variation est positive
-            if ($request->quantity <= 0) {
-                return response()->json([
-                    'success' => false,
-                    'message' => 'La quantité de la variation doit être positive'
-                ], 400);
-            }
-
-            // Calculer la somme des quantités des autres variations (excluant celle en cours de modification)
-            $totalOtherVariationsQuantity = Variation::where('article_id', $variation->article_id)
-                ->where('id', '!=', $id)
-                ->sum('quantity');
-
-            // Vérifier que la somme des quantités des variations (autres + modifiée) ne dépasse pas la quantité totale de l'article
-            if ($totalOtherVariationsQuantity + $request->quantity > $article->quantity) {
-                $availableQuantity = $article->quantity - $totalOtherVariationsQuantity;
-                return response()->json([
-                    'success' => false,
-                    'message' => 'La somme des quantités des variations ne peut pas dépasser la quantité totale de l\'article. Quantité disponible pour cette variation: ' . $availableQuantity
-                ], 400);
-            }
-
+            // Pas de plafond lié à article.quantity (supprimé).
             $variation->update([
-                'name' => $request->name,
+                'name' => trim($request->name),
                 'quantity' => $request->quantity,
+                'price' => $request->price,
+                'cost_price' => $request->cost_price,
                 'image' => $request->image,
             ]);
 
@@ -301,7 +285,7 @@ class VariationController extends Controller
     /**
      * Remove the specified variation.
      */
-    public function destroy(string $id): JsonResponse
+    public function destroy(Request $request, string $id): JsonResponse
     {
         try {
             $variation = Variation::find($id);
@@ -325,11 +309,50 @@ class VariationController extends Controller
                 ], 403);
             }
 
-            $variation->delete();
+            // Interdit de supprimer la dernière variation active d'un article
+            // variable — un article variable doit toujours avoir au moins une
+            // variation pour porter son stock/prix.
+            $activeVariationsCount = Variation::where('article_id', $article->id)->count();
+            if ($activeVariationsCount <= 1) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Impossible de supprimer la dernière variation de cet article'
+                ], 422);
+            }
 
+            // Un stock restant ne peut pas disparaître silencieusement : il faut
+            // une confirmation explicite (le frontend l'affiche comme une boîte
+            // de dialogue nommant la quantité et sa valeur).
+            $remaining = $variation->remaining_quantity;
+            $confirmed = filter_var($request->input('confirm', false), FILTER_VALIDATE_BOOLEAN);
+
+            if ($remaining > 0 && !$confirmed) {
+                return response()->json([
+                    'success' => false,
+                    'message' => "Cette variation contient encore {$remaining} unité(s). Videz le stock ou confirmez l'archivage.",
+                    'remaining_quantity' => $remaining,
+                ], 422);
+            }
+
+            $hasHistory = Transaction::where('variable_id', $variation->id)->exists()
+                || InvoiceItem::where('variation_id', $variation->id)->exists();
+
+            if ($hasHistory) {
+                // Historique de ventes/factures à préserver : archive seulement.
+                $variation->delete();
+                $message = 'Variation archivée avec succès';
+            } else {
+                // Rien ne la référence : suppression réelle, pas d'historique à perdre.
+                $variation->forceDelete();
+                $message = 'Variation supprimée avec succès';
+            }
+
+            // La suppression déclenche aussi l'observer (resync de l'article) ;
+            // pour un forceDelete, Eloquent déclenche toujours l'évènement
+            // 'deleted' avant de retirer la ligne.
             return response()->json([
                 'success' => true,
-                'message' => 'Variation supprimée avec succès'
+                'message' => $message
             ]);
 
         } catch (\Exception $e) {

@@ -9,6 +9,7 @@ use App\Models\Client;
 use App\Models\Invoice;
 use App\Models\InvoiceItem;
 use App\Models\Transaction;
+use App\Models\Variation;
 use App\Services\NotificationService;
 use Barryvdh\DomPDF\Facade\Pdf;
 use Illuminate\Database\QueryException;
@@ -279,6 +280,7 @@ class InvoiceController extends Controller
             'client_id' => ['required', 'uuid', 'exists:clients,id'],
             'items' => ['required', 'array', 'min:1'],
             'items.*.article_id' => ['required', 'uuid', 'exists:articles,id'],
+            'items.*.variation_id' => ['nullable', 'uuid', 'exists:variations,id'],
             'items.*.quantity' => ['required', 'integer', 'min:1'],
             'items.*.unit_price' => ['nullable', 'numeric', 'min:0'],
             'items.*.discount_percent' => ['nullable', 'numeric', 'min:0', 'max:100'],
@@ -400,6 +402,54 @@ class InvoiceController extends Controller
             ], 422);
         }
 
+        // Une ligne sur un article variable DOIT préciser sa variation (prix et
+        // stock n'existent qu'au niveau de la variation) ; un article simple ne
+        // doit jamais en recevoir une.
+        $articlesByIdForValidation = Article::whereIn('id', $articleIds)->get()->keyBy('id');
+        $variationIds = collect($request->items)->pluck('variation_id')->filter()->unique();
+        $variationsByIdForValidation = $variationIds->isEmpty()
+            ? collect()
+            : Variation::whereIn('id', $variationIds)->get()->keyBy('id');
+
+        foreach ($request->items as $item) {
+            $article = $articlesByIdForValidation->get($item['article_id']);
+            if (!$article) {
+                continue; // déjà signalé par $unknownArticles ci-dessus
+            }
+
+            $variationId = $item['variation_id'] ?? null;
+
+            if ($article->type === 'variable' && !$variationId) {
+                // Un client à jour envoie toujours variation_id ici — ce cas ne
+                // peut venir que d'un client obsolète (onglet resté ouvert depuis avant le déploiement, etc.).
+                return response()->json([
+                    'success' => false,
+                    'code' => 'STALE_CLIENT_MISSING_VARIATION',
+                    'message' => 'Mettez à jour l\'application : choisissez une variation',
+                    'errors' => ['Mettez à jour l\'application : choisissez une variation pour "' . $article->name . '"'],
+                ], 422);
+            }
+
+            if ($article->type === 'simple' && $variationId) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Erreur de stock',
+                    'errors' => ["L'article \"{$article->name}\" est simple, il ne peut pas avoir de variation"],
+                ], 422);
+            }
+
+            if ($variationId) {
+                $variation = $variationsByIdForValidation->get($variationId);
+                if (!$variation || $variation->article_id !== $article->id) {
+                    return response()->json([
+                        'success' => false,
+                        'message' => 'Erreur de stock',
+                        'errors' => ["La variation sélectionnée n'appartient pas à l'article \"{$article->name}\""],
+                    ], 422);
+                }
+            }
+        }
+
         // =====================================================================
         // ÉTAPE 4: CRÉATION EN TRANSACTION DB (avec retry sur collision de numéro)
         // =====================================================================
@@ -434,23 +484,33 @@ class InvoiceController extends Controller
                         'terms' => $request->terms ?? '',
                     ]);
 
-                    // Créer les lignes de facture (snapshot des articles)
+                    // Créer les lignes de facture (snapshot des articles/variations)
                     $articlesById = Article::whereIn('id', collect($request->items)->pluck('article_id'))
                         ->get()
                         ->keyBy('id');
 
+                    $invoiceVariationIds = collect($request->items)->pluck('variation_id')->filter()->unique();
+                    $variationsById = $invoiceVariationIds->isEmpty()
+                        ? collect()
+                        : Variation::whereIn('id', $invoiceVariationIds)->get()->keyBy('id');
+
                     foreach ($request->items as $item) {
                         $article = $articlesById->get($item['article_id']);
+                        $variationId = $item['variation_id'] ?? null;
+                        $variation = $variationId ? $variationsById->get($variationId) : null;
                         $quantity = (int) $item['quantity'];
                         $discountPercent = (float) ($item['discount_percent'] ?? 0);
-                        $unitPrice = (float) ($item['unit_price'] ?? $article->sale_price);
+                        // Prix par défaut d'une ligne variable : celui DE LA VARIATION, pas
+                        // celui (min/max) de l'article.
+                        $unitPrice = (float) ($item['unit_price'] ?? ($variation->price ?? $article->sale_price));
 
                         $lineCalc = InvoiceItem::calculateLineTotal($unitPrice, $quantity, $discountPercent);
 
                         InvoiceItem::create([
                             'invoice_id' => $invoice->id,
                             'article_id' => $article->id,
-                            'name_snapshot' => $article->name,
+                            'variation_id' => $variation?->id,
+                            'name_snapshot' => $variation ? "{$article->name} ({$variation->name})" : $article->name,
                             'description_snapshot' => null,
                             'unit_price' => $unitPrice,
                             'quantity' => $quantity,
@@ -948,6 +1008,7 @@ class InvoiceController extends Controller
                     InvoiceItem::create([
                         'invoice_id' => $newInvoice->id,
                         'article_id' => $item->article_id,
+                        'variation_id' => $item->variation_id,
                         'name_snapshot' => $item->name_snapshot,
                         'description_snapshot' => $item->description_snapshot,
                         'unit_price' => $item->unit_price,
@@ -1067,8 +1128,12 @@ class InvoiceController extends Controller
         }
 
         $qtyByArticle = [];
+        $qtyByVariation = [];
         foreach ($items as $item) {
             $qtyByArticle[$item->article_id] = ($qtyByArticle[$item->article_id] ?? 0) + $item->quantity;
+            if ($item->variation_id) {
+                $qtyByVariation[$item->variation_id] = ($qtyByVariation[$item->variation_id] ?? 0) + $item->quantity;
+            }
         }
 
         // Verrouille les lignes articles concernées jusqu'à la fin de la transaction
@@ -1079,6 +1144,15 @@ class InvoiceController extends Controller
             ->get()
             ->keyBy('id');
 
+        // Même principe au niveau variation : c'est elle, pas l'article, qui
+        // porte le stock réel d'un article variable.
+        $variations = empty($qtyByVariation)
+            ? collect()
+            : Variation::whereIn('id', array_keys($qtyByVariation))
+                ->lockForUpdate()
+                ->get()
+                ->keyBy('id');
+
         $errors = [];
         foreach ($qtyByArticle as $articleId => $requestedQty) {
             $article = $articles->get($articleId);
@@ -1088,8 +1162,23 @@ class InvoiceController extends Controller
                 continue;
             }
 
-            if ($article->remaining_quantity < $requestedQty) {
+            // Le stock d'un article variable est vérifié par variation (ci-dessous) ;
+            // seul un article simple a un stock propre à vérifier ici.
+            if ($article->type === 'simple' && $article->remaining_quantity < $requestedQty) {
                 $errors[] = "Stock insuffisant pour \"{$article->name}\". Disponible: {$article->remaining_quantity}, Demandé: {$requestedQty}";
+            }
+        }
+
+        foreach ($qtyByVariation as $variationId => $requestedQty) {
+            $variation = $variations->get($variationId);
+
+            if (!$variation) {
+                $errors[] = "Une variation de la facture est introuvable.";
+                continue;
+            }
+
+            if ($variation->remaining_quantity < $requestedQty) {
+                $errors[] = "Stock insuffisant pour {$variation->name} : {$variation->remaining_quantity} disponible(s), demandé : {$requestedQty}";
             }
         }
 
@@ -1101,6 +1190,7 @@ class InvoiceController extends Controller
             Transaction::create([
                 'user_id' => $invoice->user_id,
                 'article_id' => $item->article_id,
+                'variable_id' => $item->variation_id,
                 'invoice_id' => $invoice->id,
                 'name' => "Vente: {$item->name_snapshot} (Facture {$invoice->invoice_number})",
                 'type' => 'sale',
@@ -1108,6 +1198,13 @@ class InvoiceController extends Controller
                 'amount' => $item->total_line,
                 'sale_price' => $item->unit_price,
             ]);
+        }
+
+        // Alerte de stock faible par variation pour chaque ligne concernée.
+        foreach ($variations as $variation) {
+            $variation->refresh();
+            $variation->load('article.user.settings');
+            NotificationService::checkLowStockVariation($variation);
         }
     }
 

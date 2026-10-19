@@ -5,6 +5,8 @@ namespace App\Http\Controllers\API;
 use App\Http\Controllers\Controller;
 use App\Models\Article;
 use App\Models\StockReplenishment;
+use App\Models\Variation;
+use App\Services\ArticleStockService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
@@ -51,28 +53,54 @@ class ArticleController extends Controller
     public function store(Request $request): JsonResponse
     {
         try {
-            $validator = Validator::make($request->all(), [
+            $type = $request->input('type');
+            $hasVariationsPayload = $request->has('variations');
+
+            $rules = [
                 'name' => 'required|string|max:255|unique:articles,name,NULL,id,user_id,' . Auth::id(),
-                'sale_price' => 'required|numeric|min:0',
-                'quantity' => 'required|integer|min:0',
                 'type' => 'required|in:simple,variable',
                 'image' => 'nullable|string|max:255',
-            ], [
+            ];
+            $messages = [
                 'name.required' => 'Le nom de l\'article est obligatoire',
                 'name.string' => 'Le nom de l\'article doit être une chaîne de caractères',
                 'name.max' => 'Le nom de l\'article ne peut pas dépasser 255 caractères',
                 'name.unique' => 'Un article avec ce nom existe déjà',
-                'sale_price.required' => 'Le prix de vente est obligatoire',
-                'sale_price.numeric' => 'Le prix de vente doit être un nombre',
-                'sale_price.min' => 'Le prix de vente doit être supérieur ou égal à 0',
-                'quantity.required' => 'La quantité est obligatoire',
-                'quantity.integer' => 'La quantité doit être un nombre entier',
-                'quantity.min' => 'La quantité doit être supérieure ou égale à 0',
                 'type.required' => 'Le type d\'article est obligatoire',
                 'type.in' => 'Le type d\'article doit être "simple" ou "variable"',
                 'image.string' => 'L\'image doit être une chaîne de caractères',
                 'image.max' => 'Le nom de l\'image ne peut pas dépasser 255 caractères',
-            ]);
+            ];
+
+            if ($type === 'variable') {
+                // Un article variable n'a ni quantité ni prix propres : ils sont
+                // calculés depuis ses variations. sale_price/quantity envoyés
+                // par un ancien frontend sont simplement ignorés (compatibilité
+                // ascendante), jamais exigés ni rejetés.
+                if ($hasVariationsPayload) {
+                    $rules['variations'] = 'array|min:1';
+                    $rules['variations.*.name'] = 'required|string|max:255';
+                    $rules['variations.*.quantity'] = 'required|integer|min:0';
+                    $rules['variations.*.price'] = 'required|numeric|min:0.01';
+                    $rules['variations.*.cost_price'] = 'nullable|numeric|min:0';
+                    $messages['variations.min'] = 'Au moins une variation est nécessaire';
+                    $messages['variations.*.name.required'] = 'Le nom de la variation est obligatoire';
+                    $messages['variations.*.quantity.min'] = 'La quantité doit être supérieure ou égale à 0';
+                    $messages['variations.*.price.required'] = 'Le prix de la variation est obligatoire';
+                    $messages['variations.*.price.min'] = 'Le prix de la variation doit être supérieur à 0';
+                }
+            } else {
+                $rules['sale_price'] = 'required|numeric|min:0';
+                $rules['quantity'] = 'required|integer|min:0';
+                $messages['sale_price.required'] = 'Le prix de vente est obligatoire';
+                $messages['sale_price.numeric'] = 'Le prix de vente doit être un nombre';
+                $messages['sale_price.min'] = 'Le prix de vente doit être supérieur ou égal à 0';
+                $messages['quantity.required'] = 'La quantité est obligatoire';
+                $messages['quantity.integer'] = 'La quantité doit être un nombre entier';
+                $messages['quantity.min'] = 'La quantité doit être supérieure ou égale à 0';
+            }
+
+            $validator = Validator::make($request->all(), $rules, $messages);
 
             if ($validator->fails()) {
                 return response()->json([
@@ -82,23 +110,81 @@ class ArticleController extends Controller
                 ], 422);
             }
 
-            $article = Article::create([
-                'user_id' => Auth::id(),
-                'name' => $request->name,
-                'sale_price' => $request->sale_price,
-                'quantity' => $request->quantity,
-                'type' => $request->type,
-                'image' => $request->image,
-            ]);
+            if ($type === 'variable' && $hasVariationsPayload) {
+                $seenNames = [];
+                foreach ($request->input('variations') as $variationData) {
+                    $normalized = mb_strtolower(trim($variationData['name']));
+                    if (isset($seenNames[$normalized])) {
+                        return response()->json([
+                            'success' => false,
+                            'message' => 'Erreur de validation',
+                            'errors' => ['variations' => ["Nom de variation en double : \"{$variationData['name']}\""]]
+                        ], 422);
+                    }
+                    $seenNames[$normalized] = true;
+                }
+            }
+
+            $article = DB::transaction(function () use ($request, $type, $hasVariationsPayload) {
+                $article = Article::create([
+                    'user_id' => Auth::id(),
+                    'name' => $request->name,
+                    'type' => $type,
+                    'image' => $request->image,
+                    'sale_price' => $type === 'variable' ? 0 : $request->sale_price,
+                    'quantity' => $type === 'variable' ? 0 : $request->quantity,
+                ]);
+
+                if ($type === 'variable' && $hasVariationsPayload) {
+                    foreach ($request->input('variations') as $variationData) {
+                        Variation::create([
+                            'article_id' => $article->id,
+                            'name' => trim($variationData['name']),
+                            'quantity' => $variationData['quantity'],
+                            'price' => $variationData['price'],
+                            'cost_price' => $variationData['cost_price'] ?? null,
+                        ]);
+                    }
+
+                    // L'observer a déjà resynchronisé après chaque création ;
+                    // appel explicite final pour un état garanti cohérent.
+                    ArticleStockService::syncVariableTotals($article);
+                }
+
+                return $article;
+            });
 
             // Charger les relations nécessaires pour les accessors
             $article->load('user.settings');
+
+            if ($article->type === 'variable') {
+                $article->load(['variations' => function ($query) {
+                    $query->withSum('transactions', 'quantity');
+                }]);
+            }
 
             return response()->json([
                 'success' => true,
                 'message' => 'Article créé avec succès',
                 'data' => $article
             ], 201);
+        } catch (\Illuminate\Database\QueryException $e) {
+            // Contrainte unique (article_id, lower(trim(name))) sur variations —
+            // filet de sécurité si la pré-vérification applicative a laissé
+            // passer un doublon (ex. appel concurrent).
+            if (str_contains($e->getMessage(), 'variations_article_id_norm_name_unique')) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Erreur de validation',
+                    'errors' => ['variations' => ['Deux variations ne peuvent pas porter le même nom']]
+                ], 422);
+            }
+
+            return response()->json([
+                'success' => false,
+                'message' => 'Erreur lors de la création de l\'article',
+                'error' => $e->getMessage()
+            ], 500);
         } catch (\Exception $e) {
             return response()->json([
                 'success' => false,
@@ -172,25 +258,34 @@ class ArticleController extends Controller
                 ], 400);
             }
 
-            $validator = Validator::make($request->all(), [
+            $rules = [
                 'name' => 'required|string|max:255|unique:articles,name,' . $id . ',id,user_id,' . Auth::id(),
-                'sale_price' => 'required|numeric|min:0',
-                'quantity' => 'required|integer|min:0',
                 'image' => 'nullable|string|max:255',
-            ], [
+            ];
+            $messages = [
                 'name.required' => 'Le nom de l\'article est obligatoire',
                 'name.string' => 'Le nom de l\'article doit être une chaîne de caractères',
                 'name.max' => 'Le nom de l\'article ne peut pas dépasser 255 caractères',
                 'name.unique' => 'Un article avec ce nom existe déjà',
-                'sale_price.required' => 'Le prix de vente est obligatoire',
-                'sale_price.numeric' => 'Le prix de vente doit être un nombre',
-                'sale_price.min' => 'Le prix de vente doit être supérieur ou égal à 0',
-                'quantity.required' => 'La quantité est obligatoire',
-                'quantity.integer' => 'La quantité doit être un nombre entier',
-                'quantity.min' => 'La quantité doit être supérieure ou égale à 0',
                 'image.string' => 'L\'image doit être une chaîne de caractères',
                 'image.max' => 'Le nom de l\'image ne peut pas dépasser 255 caractères',
-            ]);
+            ];
+
+            // sale_price/quantity ne sont saisissables que pour un article simple —
+            // pour un article variable, ces colonnes sont un cache synchronisé
+            // depuis les variations (ArticleStockService::syncVariableTotals).
+            if ($article->type === 'simple') {
+                $rules['sale_price'] = 'required|numeric|min:0';
+                $rules['quantity'] = 'required|integer|min:0';
+                $messages['sale_price.required'] = 'Le prix de vente est obligatoire';
+                $messages['sale_price.numeric'] = 'Le prix de vente doit être un nombre';
+                $messages['sale_price.min'] = 'Le prix de vente doit être supérieur ou égal à 0';
+                $messages['quantity.required'] = 'La quantité est obligatoire';
+                $messages['quantity.integer'] = 'La quantité doit être un nombre entier';
+                $messages['quantity.min'] = 'La quantité doit être supérieure ou égale à 0';
+            }
+
+            $validator = Validator::make($request->all(), $rules, $messages);
 
             if ($validator->fails()) {
                 return response()->json([
@@ -200,12 +295,17 @@ class ArticleController extends Controller
                 ], 422);
             }
 
-            $article->update([
+            $updateData = [
                 'name' => $request->name,
-                'sale_price' => $request->sale_price,
-                'quantity' => $request->quantity,
                 'image' => $request->image,
-            ]);
+            ];
+
+            if ($article->type === 'simple') {
+                $updateData['sale_price'] = $request->sale_price;
+                $updateData['quantity'] = $request->quantity;
+            }
+
+            $article->update($updateData);
 
             // Charger les relations nécessaires pour les accessors
             $article->load('user.settings');
@@ -303,26 +403,6 @@ class ArticleController extends Controller
     public function addStock(Request $request, string $id): JsonResponse
     {
         try {
-            // Validation
-            $validator = Validator::make($request->all(), [
-                'quantity' => 'required|integer|min:1',
-                'note' => 'nullable|string|max:500',
-            ], [
-                'quantity.required' => 'La quantité à ajouter est obligatoire',
-                'quantity.integer' => 'La quantité doit être un nombre entier',
-                'quantity.min' => 'La quantité doit être au minimum de 1',
-                'note.string' => 'La note doit être une chaîne de caractères',
-                'note.max' => 'La note ne peut pas dépasser 500 caractères',
-            ]);
-
-            if ($validator->fails()) {
-                return response()->json([
-                    'success' => false,
-                    'message' => 'Erreur de validation',
-                    'errors' => $validator->errors()
-                ], 422);
-            }
-
             // Récupérer l'article appartenant à l'utilisateur connecté
             $article = Article::where('id', $id)
                 ->where('user_id', Auth::id())
@@ -335,17 +415,77 @@ class ArticleController extends Controller
                 ], 404);
             }
 
+            $rules = [
+                'quantity' => 'required|integer|min:1',
+                'note' => 'nullable|string|max:500',
+            ];
+            $messages = [
+                'quantity.required' => 'La quantité à ajouter est obligatoire',
+                'quantity.integer' => 'La quantité doit être un nombre entier',
+                'quantity.min' => 'La quantité doit être au minimum de 1',
+                'note.string' => 'La note doit être une chaîne de caractères',
+                'note.max' => 'La note ne peut pas dépasser 500 caractères',
+            ];
+
+            // Un article variable n'a pas de stock propre : le réapprovisionnement
+            // cible toujours une variation précise. Un client à jour envoie
+            // toujours variation_id ici — ce cas ne peut venir que d'un client
+            // obsolète. Vérifié à part (plutôt que via le Validator générique
+            // ci-dessous) pour renvoyer un message ET un code au niveau racine
+            // de la réponse, exploitables simplement par le frontend.
+            if ($article->type === 'variable' && !$request->filled('variation_id')) {
+                return response()->json([
+                    'success' => false,
+                    'code' => 'STALE_CLIENT_MISSING_VARIATION',
+                    'message' => 'Mettez à jour l\'application : choisissez une variation',
+                ], 422);
+            }
+
+            if ($article->type === 'variable') {
+                $rules['variation_id'] = 'required|string|exists:variations,id';
+                $messages['variation_id.exists'] = 'La variation n\'existe pas';
+            }
+
+            $validator = Validator::make($request->all(), $rules, $messages);
+
+            if ($validator->fails()) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Erreur de validation',
+                    'errors' => $validator->errors()
+                ], 422);
+            }
+
+            $variation = null;
+
+            if ($article->type === 'variable') {
+                $variation = Variation::where('id', $request->variation_id)
+                    ->where('article_id', $article->id)
+                    ->first();
+
+                if (!$variation) {
+                    return response()->json([
+                        'success' => false,
+                        'message' => 'Variation non trouvée ou non autorisée'
+                    ], 403);
+                }
+            }
+
             $quantityToAdd = (int) $request->quantity;
 
             // Utiliser une transaction DB pour garantir l'intégrité
-            DB::transaction(function () use ($article, $quantityToAdd, $request) {
-                // 1. Incrémenter la quantité de l'article
-                $article->increment('quantity', $quantityToAdd);
+            DB::transaction(function () use ($article, $variation, $quantityToAdd, $request) {
+                if ($variation) {
+                    // L'observer de Variation resynchronise automatiquement l'article.
+                    $variation->increment('quantity', $quantityToAdd);
+                } else {
+                    $article->increment('quantity', $quantityToAdd);
+                }
 
-                // 2. Créer l'entrée dans l'historique des réapprovisionnements
                 StockReplenishment::create([
                     'user_id' => Auth::id(),
                     'article_id' => $article->id,
+                    'variation_id' => $variation?->id,
                     'quantity_added' => $quantityToAdd,
                     'note' => $request->note,
                 ]);
@@ -354,7 +494,7 @@ class ArticleController extends Controller
             // Recharger l'article avec les relations pour la réponse
             $article->refresh();
             $article->load('user.settings');
-            
+
             if ($article->type === 'variable') {
                 $article->load(['variations' => function ($query) {
                     $query->withSum('transactions', 'quantity');
@@ -366,8 +506,9 @@ class ArticleController extends Controller
                 'message' => 'Stock ajouté avec succès',
                 'data' => [
                     'article' => $article,
+                    'variation' => $variation?->fresh(),
                     'added_quantity' => $quantityToAdd,
-                    'new_quantity' => $article->quantity,
+                    'new_quantity' => $variation ? $variation->fresh()->quantity : $article->quantity,
                 ]
             ], 200);
 
@@ -406,7 +547,7 @@ class ArticleController extends Controller
 
             // Récupérer l'historique des réapprovisionnements
             $history = StockReplenishment::where('article_id', $id)
-                ->with('user:id,first_name,last_name,username')
+                ->with(['user:id,first_name,last_name,username', 'variation:id,name'])
                 ->orderBy('created_at', 'desc')
                 ->paginate($perPage, ['*'], 'page', $page);
 

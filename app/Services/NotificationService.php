@@ -6,6 +6,7 @@ use App\Models\Article;
 use App\Models\Collaborator;
 use App\Models\Invoice;
 use App\Models\Notification;
+use App\Models\Variation;
 
 class NotificationService
 {
@@ -48,6 +49,59 @@ class NotificationService
                 'type' => 'warning',
                 'title' => 'Stock faible',
                 'message' => "Le produit \"{$article->name}\" est en stock faible ({$remainingQuantity} unité(s) restante(s), {$salesPercentage}% vendu).",
+                'read' => false,
+                'article_id' => $article->id,
+                'action_url' => "/products/{$article->id}",
+            ]);
+        }
+    }
+
+    /**
+     * Vérifie si UNE VARIATION précise est passée en stock faible (son propre
+     * seuil s'il est défini, sinon le seuil global de l'utilisateur) et crée
+     * une notification dédiée si nécessaire. Le total de l'article reste
+     * affiché ailleurs, mais n'est plus l'unique critère d'alerte pour un
+     * article variable — chaque variation est surveillée indépendamment.
+     */
+    public static function checkLowStockVariation(Variation $variation): void
+    {
+        if (!$variation->relationLoaded('article')) {
+            $variation->load('article.user.settings');
+        }
+
+        $article = $variation->article;
+
+        if (!$article) {
+            return;
+        }
+
+        if ($article->user?->settings && !$article->user->settings->notify_stock_low) {
+            return;
+        }
+
+        $currentLowStock = $variation->low_stock;
+
+        // Le nom de la variation dans le message permet de distinguer les
+        // notifications déjà envoyées pour CETTE variation de celles d'une
+        // autre variation du même article (qui doit pouvoir déclencher sa
+        // propre alerte indépendamment).
+        $existingNotification = Notification::where('user_id', $article->user_id)
+            ->where('article_id', $article->id)
+            ->where('type', 'warning')
+            ->where('read', false)
+            ->where('title', 'like', '%Stock faible%')
+            ->where('message', 'like', '%' . $variation->name . '%')
+            ->first();
+
+        if ($currentLowStock && !$existingNotification) {
+            $remainingQuantity = $variation->remaining_quantity;
+            $salesPercentage = $variation->sales_percentage;
+
+            Notification::create([
+                'user_id' => $article->user_id,
+                'type' => 'warning',
+                'title' => 'Stock faible',
+                'message' => "{$article->name} · {$variation->name} : {$remainingQuantity} restant(s) ({$salesPercentage}% vendu).",
                 'read' => false,
                 'article_id' => $article->id,
                 'action_url' => "/products/{$article->id}",
