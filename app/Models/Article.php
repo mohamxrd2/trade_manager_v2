@@ -2,15 +2,48 @@
 
 namespace App\Models;
 
+use App\Services\ArticleStockService;
 use Illuminate\Database\Eloquent\Concerns\HasUuids;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Support\Facades\Log;
 
 class Article extends Model
 {
     use HasUuids;
-    
+
+    /**
+     * For a variable article, quantity/sale_price/price_max are a cache
+     * synced from its variations (ArticleStockService::syncVariableTotals).
+     * Block any other direct write to those columns on an UPDATE (initial
+     * creation with placeholder zeros, before variations exist, is allowed —
+     * that's the atomic-creation flow's own responsibility, not a bypass).
+     */
+    protected static function booted(): void
+    {
+        static::saving(function (Article $article) {
+            if ($article->type !== 'variable' || !$article->exists || ArticleStockService::isSyncing()) {
+                return;
+            }
+
+            $guardedFields = array_intersect(['quantity', 'sale_price', 'price_max'], array_keys($article->getDirty()));
+
+            if (empty($guardedFields)) {
+                return;
+            }
+
+            $message = 'Écriture directe interdite sur [' . implode(', ', $guardedFields) .
+                "] pour l'article variable {$article->id} — passez par ArticleStockService::syncVariableTotals().";
+
+            if (app()->environment(['local', 'testing'])) {
+                throw new \RuntimeException($message);
+            }
+
+            Log::error($message, ['article_id' => $article->id, 'dirty' => $guardedFields]);
+        });
+    }
+
 
     /**
      * The attributes that are mass assignable.
@@ -21,6 +54,7 @@ class Article extends Model
         'user_id',
         'name',
         'sale_price',
+        'price_max',
         'quantity',
         'type',
         'image',
@@ -33,6 +67,7 @@ class Article extends Model
      */
     protected $casts = [
         'sale_price' => 'decimal:2',
+        'price_max' => 'decimal:2',
         'quantity' => 'integer',
     ];
 

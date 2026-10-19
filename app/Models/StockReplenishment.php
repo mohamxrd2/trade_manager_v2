@@ -24,6 +24,7 @@ class StockReplenishment extends Model
     protected $fillable = [
         'user_id',
         'article_id',
+        'variation_id',
         'quantity_added',
         'note',
     ];
@@ -53,6 +54,14 @@ class StockReplenishment extends Model
     public function article(): BelongsTo
     {
         return $this->belongsTo(Article::class);
+    }
+
+    /**
+     * Get the variation that was replenished, for a variable article.
+     */
+    public function variation(): BelongsTo
+    {
+        return $this->belongsTo(Variation::class);
     }
 }
 

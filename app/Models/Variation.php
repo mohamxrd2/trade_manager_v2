@@ -6,11 +6,12 @@ use Illuminate\Database\Eloquent\Concerns\HasUuids;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\SoftDeletes;
 
 class Variation extends Model
 {
-    use HasUuids;
-    
+    use HasUuids, SoftDeletes;
+
     /**
      * The attributes that are mass assignable.
      *
@@ -20,6 +21,9 @@ class Variation extends Model
         'article_id',
         'name',
         'quantity',
+        'price',
+        'cost_price',
+        'low_stock_threshold',
         'image',
     ];
 
@@ -30,6 +34,9 @@ class Variation extends Model
      */
     protected $casts = [
         'quantity' => 'integer',
+        'price' => 'decimal:2',
+        'cost_price' => 'decimal:2',
+        'low_stock_threshold' => 'integer',
     ];
 
     /**

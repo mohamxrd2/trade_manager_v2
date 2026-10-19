@@ -224,9 +224,13 @@ class TransactionController extends Controller
 
                 if ($article) {
                     if ($article->type === 'variable' && !$request->variable_id) {
+                        // Le frontend à jour envoie toujours variable_id pour un
+                        // article variable — n'arriver ici ne peut venir que d'un
+                        // client obsolète (onglet resté ouvert depuis avant le déploiement, etc.).
                         return response()->json([
                             'success' => false,
-                            'message' => 'Pour un article variable, variable_id est obligatoire'
+                            'code' => 'STALE_CLIENT_MISSING_VARIATION',
+                            'message' => 'Mettez à jour l\'application : choisissez une variation'
                         ], 422);
                     }
 
@@ -309,9 +313,13 @@ class TransactionController extends Controller
 
                     // Si c'est une vente de variation
                     if ($request->variable_id) {
-                        // Vérifier que la variation existe et appartient à l'article
+                        // lockForUpdate() verrouille la ligne de la variation pour la
+                        // durée de la transaction DB : deux ventes simultanées sur la
+                        // dernière unité s'exécutent alors en série, pas en parallèle,
+                        // donc une seule peut passer le contrôle de stock ci-dessous.
                         $variation = \App\Models\Variation::where('id', $request->variable_id)
                             ->where('article_id', $request->article_id)
+                            ->lockForUpdate()
                             ->first();
 
                         if (!$variation) {
@@ -321,11 +329,19 @@ class TransactionController extends Controller
                             ], 403);
                         }
 
+                        // Recharger la quantité vendue APRÈS le verrou pour ne pas se
+                        // fier à une valeur potentiellement obsolète lue avant lui.
+                        $variation->loadSum(['transactions' => function ($q) {
+                            $q->where('type', 'sale');
+                        }], 'quantity');
+
                         // Vérifier que la quantité disponible dans la variation est suffisante
+                        // (remaining_quantity peut être négatif ou nul — la comparaison reste
+                        // valide et ne plante jamais, elle refuse juste la vente).
                         if ($request->quantity > $variation->remaining_quantity) {
                             return response()->json([
                                 'success' => false,
-                                'message' => 'Quantité insuffisante dans la variation. Quantité disponible: ' . $variation->remaining_quantity
+                                'message' => "Stock insuffisant pour {$variation->name} : {$variation->remaining_quantity} disponible(s)"
                             ], 400);
                         }
 
@@ -341,8 +357,9 @@ class TransactionController extends Controller
                         }
                     }
 
-                    // Gestion du prix de vente
-                    $salePrice = $request->sale_price ?? $article->sale_price;
+                    // Gestion du prix de vente — le prix par défaut d'une variation
+                    // est SON PROPRE prix, pas celui (min/max) de l'article.
+                    $salePrice = $request->sale_price ?? ($request->variable_id ? $variation->price : $article->sale_price);
 
                     // Calculer le montant automatiquement
                     $amount = $salePrice * $request->quantity;
@@ -369,8 +386,19 @@ class TransactionController extends Controller
                         $q->where('type', 'sale');
                     }], 'quantity');
 
-                    // Vérifier si l'article est passé en stock faible et créer une notification
-                    NotificationService::checkLowStock($article);
+                    if ($request->variable_id) {
+                        // Alerte par variation : le seuil propre à la variation
+                        // (sinon le seuil global) décide, pas le total de l'article.
+                        $variation->refresh();
+                        $variation->load('article.user.settings');
+                        $variation->loadSum(['transactions' => function ($q) {
+                            $q->where('type', 'sale');
+                        }], 'quantity');
+                        NotificationService::checkLowStockVariation($variation);
+                    } else {
+                        // Vérifier si l'article est passé en stock faible et créer une notification
+                        NotificationService::checkLowStock($article);
+                    }
 
                     return response()->json([
                         'success' => true,
@@ -514,29 +542,46 @@ class TransactionController extends Controller
                     $newQuantity = $request->quantity ?? $transaction->quantity;
                     $newSalePrice = $request->sale_price ?? $transaction->sale_price;
 
-                    // Si la quantité change, gérer le stock
+                    // Modèle (A) : article.quantity / variation.quantity sont le
+                    // CUMUL stocké en entrée, jamais modifiés par une vente. Le
+                    // restant est toujours dérivé de la somme des transactions —
+                    // donc AUCUN increment()/decrement() ici (ancien bug : ça
+                    // gonflait le cumulé à chaque édition d'une vente). On se
+                    // contente de vérifier la disponibilité avant d'enregistrer.
                     if ($newQuantity != $oldQuantity) {
-                        // Restaurer l'ancienne quantité
-                        $article->increment('quantity', $oldQuantity);
+                        if ($transaction->variable_id) {
+                            $variation = \App\Models\Variation::where('id', $transaction->variable_id)
+                                ->lockForUpdate()
+                                ->first();
 
-                        // Calculer la quantité réellement disponible (stock - autres ventes)
-                        $otherSoldQuantity = $article->transactions()
-                            ->where('type', 'sale')
-                            ->where('id', '!=', $transaction->id)
-                            ->sum('quantity');
+                            $otherSoldQuantity = Transaction::where('variable_id', $transaction->variable_id)
+                                ->where('type', 'sale')
+                                ->where('id', '!=', $transaction->id)
+                                ->sum('quantity');
 
-                        $availableQuantity = $article->quantity - $otherSoldQuantity;
+                            $availableQuantity = ($variation->quantity ?? 0) - $otherSoldQuantity;
 
-                        // Vérifier que la nouvelle quantité est disponible
-                        if ($newQuantity > $availableQuantity) {
-                            return response()->json([
-                                'success' => false,
-                                'message' => 'Quantité insuffisante. Quantité disponible: ' . $availableQuantity
-                            ], 400);
+                            if ($newQuantity > $availableQuantity) {
+                                return response()->json([
+                                    'success' => false,
+                                    'message' => "Stock insuffisant pour {$variation->name} : {$availableQuantity} disponible(s)"
+                                ], 400);
+                            }
+                        } else {
+                            $otherSoldQuantity = $article->transactions()
+                                ->where('type', 'sale')
+                                ->where('id', '!=', $transaction->id)
+                                ->sum('quantity');
+
+                            $availableQuantity = $article->quantity - $otherSoldQuantity;
+
+                            if ($newQuantity > $availableQuantity) {
+                                return response()->json([
+                                    'success' => false,
+                                    'message' => 'Quantité insuffisante. Quantité disponible: ' . $availableQuantity
+                                ], 400);
+                            }
                         }
-
-                        // Déduire la nouvelle quantité
-                        $article->decrement('quantity', $newQuantity);
                     }
 
                     // Calculer le nouveau montant : quantity * sale_price
@@ -557,8 +602,20 @@ class TransactionController extends Controller
                         $q->where('type', 'sale');
                     }], 'quantity');
 
-                    // Vérifier si l'article est passé en stock faible et créer une notification
-                    NotificationService::checkLowStock($article);
+                    if ($transaction->variable_id) {
+                        $variation = $variation ?? \App\Models\Variation::find($transaction->variable_id);
+                        if ($variation) {
+                            $variation->refresh();
+                            $variation->load('article.user.settings');
+                            $variation->loadSum(['transactions' => function ($q) {
+                                $q->where('type', 'sale');
+                            }], 'quantity');
+                            NotificationService::checkLowStockVariation($variation);
+                        }
+                    } else {
+                        // Vérifier si l'article est passé en stock faible et créer une notification
+                        NotificationService::checkLowStock($article);
+                    }
 
                 } else { // type === 'expense'
                     // Pour une dépense, on peut modifier name et/ou amount
@@ -615,11 +672,11 @@ class TransactionController extends Controller
             $this->rollbackAnyOpenTransaction();
 
             return DB::transaction(function () use ($transaction) {
-                // Si c'est une vente, restaurer la quantité de l'article
-                if ($transaction->type === 'sale' && $transaction->article) {
-                    $transaction->article->increment('quantity', $transaction->quantity);
-                }
-
+                // Modèle (A) : rien à "restaurer" sur article.quantity/variation.quantity —
+                // ce ne sont jamais les ventes qui les modifient. Supprimer cette
+                // transaction retire mécaniquement sa quantité de la somme des
+                // ventes, ce qui suffit à recalculer le restant correctement
+                // (ancien bug : cet increment() gonflait le cumulé en plus de ça).
                 $transaction->delete();
 
                 return response()->json([

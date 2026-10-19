@@ -22,6 +22,7 @@ class InvoiceItem extends Model
     protected $fillable = [
         'invoice_id',
         'article_id',
+        'variation_id',
         'name_snapshot',
         'description_snapshot',
         'unit_price',
@@ -60,6 +61,14 @@ class InvoiceItem extends Model
     public function article(): BelongsTo
     {
         return $this->belongsTo(Article::class);
+    }
+
+    /**
+     * Get the variation for the item, for a variable article's line.
+     */
+    public function variation(): BelongsTo
+    {
+        return $this->belongsTo(Variation::class);
     }
 
     /**

@@ -6,6 +6,7 @@ use App\Models\Article;
 use App\Models\Transaction;
 use App\Models\User;
 use App\Models\Variation;
+use App\Services\ArticleStockService;
 use Illuminate\Database\Seeder;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Str;
@@ -109,12 +110,13 @@ class UserDataSeeder extends Seeder
      */
     private function createVariableArticles(User $user): void
     {
+        // 'default_price' n'est jamais stocké sur l'article : c'est juste le prix
+        // appliqué à chaque variation ci-dessous (règle : un article variable n'a
+        // ni quantité ni prix propres, seulement des variations).
         $variableArticles = [
             [
                 'name' => 'T-Shirt Premium',
-                'sale_price' => 24.99,
-                'quantity' => 0, // Pour les articles variables, la quantité est gérée par les variations
-                'type' => 'variable',
+                'default_price' => 24.99,
                 'variations' => [
                     ['name' => 'T-Shirt Premium - S', 'quantity' => 25],
                     ['name' => 'T-Shirt Premium - M', 'quantity' => 30],
@@ -124,9 +126,7 @@ class UserDataSeeder extends Seeder
             ],
             [
                 'name' => 'Chaussures de Sport',
-                'sale_price' => 89.99,
-                'quantity' => 0,
-                'type' => 'variable',
+                'default_price' => 89.99,
                 'variations' => [
                     ['name' => 'Chaussures de Sport - 40', 'quantity' => 10],
                     ['name' => 'Chaussures de Sport - 41', 'quantity' => 12],
@@ -137,9 +137,7 @@ class UserDataSeeder extends Seeder
             ],
             [
                 'name' => 'Sac à Dos Professionnel',
-                'sale_price' => 59.99,
-                'quantity' => 0,
-                'type' => 'variable',
+                'default_price' => 59.99,
                 'variations' => [
                     ['name' => 'Sac à Dos - Noir', 'quantity' => 20],
                     ['name' => 'Sac à Dos - Gris', 'quantity' => 18],
@@ -148,9 +146,7 @@ class UserDataSeeder extends Seeder
             ],
             [
                 'name' => 'Montre Connectée',
-                'sale_price' => 199.99,
-                'quantity' => 0,
-                'type' => 'variable',
+                'default_price' => 199.99,
                 'variations' => [
                     ['name' => 'Montre Connectée - Noire', 'quantity' => 12],
                     ['name' => 'Montre Connectée - Blanche', 'quantity' => 10],
@@ -161,14 +157,28 @@ class UserDataSeeder extends Seeder
 
         foreach ($variableArticles as $articleData) {
             $variations = $articleData['variations'];
-            unset($articleData['variations']);
+            $defaultPrice = $articleData['default_price'];
 
-            $article = Article::create(array_merge($articleData, ['user_id' => $user->id]));
+            $article = Article::create([
+                'name' => $articleData['name'],
+                'type' => 'variable',
+                'sale_price' => 0,
+                'quantity' => 0,
+                'user_id' => $user->id,
+            ]);
 
-            // Créer les variations pour cet article
             foreach ($variations as $variationData) {
-                Variation::create(array_merge($variationData, ['article_id' => $article->id]));
+                Variation::create([
+                    'article_id' => $article->id,
+                    'name' => $variationData['name'],
+                    'quantity' => $variationData['quantity'],
+                    'price' => $defaultPrice,
+                ]);
             }
+
+            // quantity/sale_price/price_max de l'article sont calculés à partir
+            // des variations qu'on vient de créer — jamais saisis directement.
+            ArticleStockService::syncVariableTotals($article);
         }
 
         $this->command->info("✅ " . count($variableArticles) . " articles variables créés avec leurs variations");
