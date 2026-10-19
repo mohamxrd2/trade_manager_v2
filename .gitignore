@@ -28,3 +28,4 @@ docker-data/
 *.dump
 .env.neon
 .env.staging
+cookies.txt
