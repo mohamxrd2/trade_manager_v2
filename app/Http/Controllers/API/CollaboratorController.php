@@ -76,12 +76,21 @@ class CollaboratorController extends Controller
                     ], 404);
                 }
 
-                // Validation part <= user.company_share
-                if ($request->part > $user->company_share) {
+                // Validation sur la SOMME RÉELLE des parts des collaborateurs
+                // existants (jamais sur company_share, qui peut être décalé
+                // si une opération précédente ne l'a pas correctement
+                // ajusté — voir variations:resync pour corriger un tel
+                // décalage existant). Ici il n'y a pas d'"autre" à exclure
+                // puisque c'est une création.
+                $sumOtherParts = (string) Collaborator::where('user_id', $user->id)->sum('part');
+                $projectedTotal = bcadd($sumOtherParts, (string) $request->part, 2);
+
+                if (bccomp($projectedTotal, '100', 2) > 0) {
                     return response()->json([
                         'success' => false,
-                        'message' => 'Part exceeds user company share'
-                    ], 400);
+                        'message' => 'Le total des parts dépasse 100 %',
+                        'errors' => ['part' => ['Le total des parts dépasse 100 %']],
+                    ], 422);
                 }
 
                 // Créer le collaborateur avec UUID généré automatiquement
@@ -163,15 +172,6 @@ class CollaboratorController extends Controller
     public function update(Request $request, string $id): JsonResponse
     {
         try {
-            // Vérifier que 'part' et 'wallet' ne sont pas présents dans la requête
-            if ($request->has('part')) {
-                return response()->json([
-                    'success' => false,
-                    'message' => 'Le champ part ne peut pas être modifié',
-                    'errors' => ['part' => ['Le champ part ne peut pas être modifié']]
-                ], 422);
-            }
-
             if ($request->has('wallet')) {
                 return response()->json([
                     'success' => false,
@@ -184,6 +184,7 @@ class CollaboratorController extends Controller
                 'name' => 'sometimes|string|max:255',
                 'phone' => 'sometimes|string|max:20',
                 'image' => 'nullable|string|max:255',
+                'part' => 'sometimes|numeric|min:0.01|max:99.99',
             ]);
 
             if ($validator->fails()) {
@@ -206,14 +207,51 @@ class CollaboratorController extends Controller
                     ], 404);
                 }
 
-                // Mettre à jour seulement les champs autorisés
+                if ($request->has('part')) {
+                    // Verrouiller la ligne utilisateur (ajustement de
+                    // company_share) — même précaution que store()/destroy().
+                    $user = User::where('id', Auth::id())->lockForUpdate()->first();
+
+                    if (!$user) {
+                        return response()->json([
+                            'success' => false,
+                            'message' => 'Utilisateur non trouvé'
+                        ], 404);
+                    }
+
+                    // Validation sur la SOMME RÉELLE des parts des AUTRES
+                    // collaborateurs (celui qu'on modifie est exclu de la
+                    // somme, sa nouvelle valeur est ajoutée ensuite) — jamais
+                    // sur company_share, qui peut être décalé.
+                    $sumOtherParts = (string) Collaborator::where('user_id', Auth::id())
+                        ->where('id', '!=', $id)
+                        ->sum('part');
+                    $projectedTotal = bcadd($sumOtherParts, (string) $request->part, 2);
+
+                    if (bccomp($projectedTotal, '100', 2) > 0) {
+                        return response()->json([
+                            'success' => false,
+                            'message' => 'Le total des parts dépasse 100 %',
+                            'errors' => ['part' => ['Le total des parts dépasse 100 %']],
+                        ], 422);
+                    }
+
+                    // Ajuste company_share de la DIFFÉRENCE (ancienne part −
+                    // nouvelle part) : si la part augmente, company_share
+                    // diminue d'autant, et inversement.
+                    $delta = bcsub((string) $collaborator->part, (string) $request->part, 2);
+                    $user->company_share = bcadd($user->company_share, $delta, 2);
+                    $user->save();
+                }
+
+                // Mettre à jour les champs autorisés (part comprise si fournie)
                 $collaborator->update($request->only([
-                    'name', 'phone', 'image'
+                    'name', 'phone', 'image', 'part',
                 ]));
 
                 // Recharger le collaborateur avec la relation user pour calculer le wallet
                 $collaborator->load('user');
-                
+
                 // Forcer le calcul du wallet en accédant à l'accesseur
                 $collaborator->wallet = $collaborator->wallet;
 

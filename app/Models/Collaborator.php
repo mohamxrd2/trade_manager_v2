@@ -34,15 +34,6 @@ class Collaborator extends Model
     ];
 
     /**
-     * The attributes that should be immutable (cannot be changed after creation).
-     *
-     * @var array<int, string>
-     */
-    protected $immutable = [
-        'part', // La part ne peut pas être modifiée après création
-    ];
-
-    /**
      * The attributes that should be cast.
      *
      * @var array<string, string>
