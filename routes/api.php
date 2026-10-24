@@ -79,6 +79,7 @@ Route::middleware(['auth:sanctum'])->group(function () {
     Route::post('/transactions', [TransactionController::class, 'store']);
     Route::put('/transactions/{id}', [TransactionController::class, 'update']);
     Route::delete('/transactions/{id}', [TransactionController::class, 'destroy']);
+    Route::post('/transactions/{id}/restore', [TransactionController::class, 'restore']);
     Route::delete('/transactions/all', [TransactionController::class, 'deleteAll']);
     
     // Collaborators routes

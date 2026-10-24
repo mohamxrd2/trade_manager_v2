@@ -97,6 +97,7 @@ function createVariableArticlesSchema(): void
         $table->string('type');
         $table->string('idempotency_key')->nullable();
         $table->timestamps();
+        $table->softDeletes();
         $table->unique(['user_id', 'idempotency_key'], 'transactions_user_id_idempotency_key_unique');
     });
 

@@ -88,6 +88,7 @@ function createTestSchema(): void
         $table->string('type');
         $table->string('idempotency_key')->nullable();
         $table->timestamps();
+        $table->softDeletes();
 
         // Reproduit exactement la contrainte de
         // 2026_10_12_000000_add_idempotency_key_to_transactions_table.php

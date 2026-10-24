@@ -97,6 +97,7 @@ function createCollaboratorShareTestSchema(): void
         $table->string('type');
         $table->string('idempotency_key')->nullable();
         $table->timestamps();
+        $table->softDeletes();
     });
 }
 

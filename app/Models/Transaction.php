@@ -5,11 +5,13 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Concerns\HasUuids;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\SoftDeletes;
 
 class Transaction extends Model
 {
     use HasUuids; // Utiliser UUIDs pour la clé primaire
-    
+    use SoftDeletes; // delete() marque deleted_at au lieu de retirer la ligne — restore() possible (voir TransactionController::restore())
+
 
     /**
      * The attributes that are mass assignable.
@@ -57,6 +59,13 @@ class Transaction extends Model
 
         // Événement avant suppression d'une transaction
         static::deleting(function (Transaction $transaction) {
+            $transaction->updateUserWallet();
+        });
+
+        // Événement après restauration (POST /api/transactions/{id}/restore) :
+        // la transaction redevient visible aux SUM() de stock et au solde,
+        // il faut donc recalculer au même titre qu'une création/suppression.
+        static::restored(function (Transaction $transaction) {
             $transaction->updateUserWallet();
         });
     }

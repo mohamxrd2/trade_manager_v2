@@ -658,9 +658,10 @@ class TransactionController extends Controller
     public function destroy(string $id): JsonResponse
     {
         try {
-            $transaction = Transaction::where('id', $id)
-                ->where('user_id', Auth::id())
-                ->first();
+            // Pas de filtre ->where('user_id', ...) ici : l'appartenance est
+            // désormais vérifiée par TransactionPolicy::delete() (centralisé,
+            // réutilisable pour restore() et pour les futurs rôles d'équipe).
+            $transaction = Transaction::where('id', $id)->first();
 
             if (!$transaction) {
                 return response()->json([
@@ -669,14 +670,41 @@ class TransactionController extends Controller
                 ], 404);
             }
 
+            if (Auth::user()->cannot('delete', $transaction)) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Non autorisé à supprimer cette transaction'
+                ], 403);
+            }
+
+            // Une vente générée par une facture PAYÉE ne se supprime pas
+            // depuis la liste : elle se gère depuis la facture elle-même
+            // (annulation/modification), pas par une suppression isolée qui
+            // désynchroniserait le total de la facture déjà émise/payée.
+            if ($transaction->type === 'sale' && $transaction->invoice_id) {
+                $invoice = $transaction->invoice;
+                if ($invoice && $invoice->status === 'paid') {
+                    return response()->json([
+                        'success' => false,
+                        'message' => "Cette vente est liée à la facture {$invoice->invoice_number}. Annulez ou modifiez la facture.",
+                        'invoice_id' => $invoice->id,
+                    ], 422);
+                }
+            }
+
             $this->rollbackAnyOpenTransaction();
 
             return DB::transaction(function () use ($transaction) {
                 // Modèle (A) : rien à "restaurer" sur article.quantity/variation.quantity —
                 // ce ne sont jamais les ventes qui les modifient. Supprimer cette
-                // transaction retire mécaniquement sa quantité de la somme des
-                // ventes, ce qui suffit à recalculer le restant correctement
-                // (ancien bug : cet increment() gonflait le cumulé en plus de ça).
+                // transaction (soft delete) retire mécaniquement sa quantité de la
+                // somme des ventes, ce qui suffit à recalculer le restant
+                // correctement (ancien bug : un increment() gonflait le cumulé en
+                // plus de ça). Soft delete : la ligne reste en base (deleted_at),
+                // restaurable via restore() ci-dessous — les SUM() de stock et le
+                // calcul du solde l'excluent déjà automatiquement (SoftDeletes
+                // applique son global scope à toute requête Eloquent, y compris
+                // les agrégats withSum()/sum() utilisés pour le stock et le wallet).
                 $transaction->delete();
 
                 return response()->json([
@@ -697,6 +725,61 @@ class TransactionController extends Controller
             return response()->json([
                 'success' => false,
                 'message' => 'Erreur lors de la suppression de la transaction',
+                'error' => $e->getMessage()
+            ], 500);
+        }
+    }
+
+    /**
+     * Restaure une transaction supprimée (soft delete) par son propriétaire —
+     * utilisé par le bouton « Annuler » du toast de suppression (fenêtre de
+     * 5 secondes côté frontend), mais fonctionne indépendamment de cette
+     * fenêtre : tant que la ligne n'est pas purgée définitivement, elle est
+     * restaurable.
+     */
+    public function restore(string $id): JsonResponse
+    {
+        try {
+            $transaction = Transaction::withTrashed()->where('id', $id)->first();
+
+            if (!$transaction) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Transaction non trouvée'
+                ], 404);
+            }
+
+            if (Auth::user()->cannot('restore', $transaction)) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Non autorisé à restaurer cette transaction'
+                ], 403);
+            }
+
+            $this->rollbackAnyOpenTransaction();
+
+            return DB::transaction(function () use ($transaction) {
+                $transaction->restore();
+
+                return response()->json([
+                    'success' => true,
+                    'message' => 'Transaction restaurée avec succès',
+                    'data' => $this->loadTransactionForResponse($transaction),
+                ]);
+            });
+
+        } catch (\Exception $e) {
+            Log::error('Erreur lors de la restauration de la transaction', [
+                'exception_class' => get_class($e),
+                'message' => $e->getMessage(),
+                'file' => $e->getFile(),
+                'line' => $e->getLine(),
+                'trace' => $e->getTraceAsString(),
+            ]);
+
+            return response()->json([
+                'success' => false,
+                'message' => 'Erreur lors de la restauration de la transaction',
                 'error' => $e->getMessage()
             ], 500);
         }
