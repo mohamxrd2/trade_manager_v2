@@ -50,6 +50,22 @@ class Transaction extends Model
     ];
 
     /**
+     * `operation_code` — étape 2 du chantier "paniers multi-articles" :
+     * affiché par GET /api/transactions pour relier une ligne à son reçu
+     * (ex: "V-261026-0042"). Charger la relation `operation` avant de
+     * sérialiser (voir TransactionController::index()/show()) pour éviter un
+     * N+1 — cet accessor se contente de lire ce qui est déjà en mémoire.
+     */
+    protected $appends = [
+        'operation_code',
+    ];
+
+    public function getOperationCodeAttribute(): ?string
+    {
+        return $this->operation?->code;
+    }
+
+    /**
      * The "booted" method of the model.
      */
     protected static function booted(): void
