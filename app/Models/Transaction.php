@@ -2,10 +2,12 @@
 
 namespace App\Models;
 
+use App\Services\OperationCodeGenerator;
 use Illuminate\Database\Eloquent\Concerns\HasUuids;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\SoftDeletes;
+use Illuminate\Support\Carbon;
 
 class Transaction extends Model
 {
@@ -33,6 +35,7 @@ class Transaction extends Model
         'collaborator_id',
         'note',
         'payment_method',
+        'operation_id',
     ];
 
     /**
@@ -51,6 +54,34 @@ class Transaction extends Model
      */
     protected static function booted(): void
     {
+        // Étape 1 du chantier "paniers multi-articles" : chaque transaction
+        // créée par l'ANCIEN chemin (une transaction = une vente/dépense/
+        // apport/retrait) reçoit automatiquement sa propre opération à une
+        // seule ligne, avec son code — pour qu'il n'y ait jamais de
+        // transaction orpheline pendant la transition. Un futur appelant
+        // (étape 2/3, panier multi-lignes) qui fixe déjà `operation_id`
+        // avant la création n'est jamais écrasé ici.
+        static::creating(function (Transaction $transaction) {
+            if ($transaction->operation_id) {
+                return;
+            }
+
+            $occurredAt = $transaction->created_at ?? Carbon::now(OperationCodeGenerator::TIMEZONE);
+
+            $operation = Operation::create([
+                'user_id' => $transaction->user_id,
+                'type' => $transaction->type,
+                'code' => OperationCodeGenerator::next($transaction->user_id, $transaction->type, $occurredAt),
+                'payment_method' => $transaction->payment_method,
+                'total_amount' => $transaction->amount ?? 0,
+                'invoice_id' => $transaction->invoice_id,
+                'note' => $transaction->note,
+                'occurred_at' => $occurredAt,
+            ]);
+
+            $transaction->operation_id = $operation->id;
+        });
+
         // Événement après création d'une transaction
         static::created(function (Transaction $transaction) {
             $transaction->updateUserWallet();
@@ -128,6 +159,15 @@ class Transaction extends Model
     public function collaborator(): BelongsTo
     {
         return $this->belongsTo(Collaborator::class);
+    }
+
+    /**
+     * L'opération (panier) à laquelle cette ligne appartient — voir
+     * Operation::transactions() pour la relation inverse.
+     */
+    public function operation(): BelongsTo
+    {
+        return $this->belongsTo(Operation::class);
     }
 
     /**
