@@ -57,6 +57,9 @@ class User extends Authenticatable
         'total_expense',
         'calculated_wallet',
         'wallet',
+        'total_deposit',
+        'total_withdrawal',
+        'balance',
     ];
 
     /**
@@ -266,5 +269,41 @@ class User extends Authenticatable
     {
         $calculatedWallet = $this->calculated_wallet;
         return (float) bcmul($calculatedWallet, bcdiv($this->company_share, 100, 4), 2);
+    }
+
+    /**
+     * Get the total deposit attribute (somme des apports de fonds).
+     */
+    public function getTotalDepositAttribute(): float
+    {
+        return $this->transactions()
+            ->where('type', 'apport')
+            ->sum('amount') ?? 0;
+    }
+
+    /**
+     * Get the total withdrawal attribute (somme des retraits du gérant).
+     */
+    public function getTotalWithdrawalAttribute(): float
+    {
+        return $this->transactions()
+            ->where('type', 'retrait')
+            ->sum('amount') ?? 0;
+    }
+
+    /**
+     * Get the balance attribute (trésorerie réelle, apports/retraits inclus).
+     *
+     * Distinct de `calculated_wallet` (ventes − dépenses, INCHANGÉ par cette
+     * fonctionnalité — sert de base au partage des collaborateurs, voir
+     * Collaborator::getWalletAttribute() et compute-shares.ts côté front,
+     * qui ne doivent JAMAIS inclure apports/retraits). `balance` est la
+     * trésorerie réelle affichée sur le Portefeuille/l'Accueil : un apport
+     * n'est pas un bénéfice à partager, mais c'est bien de l'argent
+     * disponible en caisse.
+     */
+    public function getBalanceAttribute(): float
+    {
+        return $this->total_sale - $this->total_expense + $this->total_deposit - $this->total_withdrawal;
     }
 }

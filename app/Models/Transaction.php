@@ -29,6 +29,10 @@ class Transaction extends Model
         'sale_price',
         'type',
         'idempotency_key',
+        'funding_source',
+        'collaborator_id',
+        'note',
+        'payment_method',
     ];
 
     /**
@@ -115,6 +119,15 @@ class Transaction extends Model
     public function invoice(): BelongsTo
     {
         return $this->belongsTo(Invoice::class);
+    }
+
+    /**
+     * Get the collaborator that is the source of this transaction, if any
+     * (apport de fonds avec funding_source = "collaborateur").
+     */
+    public function collaborator(): BelongsTo
+    {
+        return $this->belongsTo(Collaborator::class);
     }
 
     /**

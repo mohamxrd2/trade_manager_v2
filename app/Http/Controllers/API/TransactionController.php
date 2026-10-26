@@ -81,6 +81,23 @@ class TransactionController extends Controller
     }
 
     /**
+     * Message de succès par type — centralisé pour ne pas dupliquer ce
+     * ternaire aux 3 endroits qui répondent après une création réussie
+     * (création normale, rejeu d'idempotence détecté avant écriture, rejeu
+     * détecté après conflit de contrainte unique).
+     */
+    private function successMessageFor(string $type): string
+    {
+        return match ($type) {
+            'sale' => 'Vente enregistrée avec succès',
+            'expense' => 'Dépense enregistrée avec succès',
+            'apport' => 'Apport enregistré avec succès',
+            'retrait' => 'Retrait enregistré avec succès',
+            default => 'Transaction enregistrée avec succès',
+        };
+    }
+
+    /**
      * Précharge ce qu'il faut pour la réponse JSON d'une transaction "sale"
      * (article + sa relation user.settings, nécessaire à
      * Article::getLowStockAttribute() pour éviter son propre lazy load),
@@ -201,13 +218,22 @@ class TransactionController extends Controller
     {
         try {
             $validator = Validator::make($request->all(), [
-                'type' => 'required|in:sale,expense',
+                'type' => 'required|in:sale,expense,apport,retrait',
                 'article_id' => 'required_if:type,sale|nullable|string|exists:articles,id',
                 'variable_id' => 'nullable|string|exists:variations,id',
                 'quantity' => 'required_if:type,sale|nullable|integer|min:1',
                 'name' => 'required_if:type,expense|nullable|string|max:255',
-                'amount' => 'required_if:type,expense|nullable|numeric|min:0',
+                'amount' => 'required_if:type,expense|required_if:type,apport|required_if:type,retrait|nullable|numeric|gt:0',
                 'sale_price' => 'nullable|numeric|min:0',
+                // Apport/retrait uniquement — voir section 2/4 de la
+                // spécification. `exists` avec la clause `user_id` embarquée
+                // garantit qu'un collaborator_id d'un AUTRE compte échoue en
+                // 422 (pas seulement "collaborateur introuvable").
+                'funding_source' => 'required_if:type,apport|nullable|in:apport_personnel,collaborateur,pret,autre',
+                'collaborator_id' => 'required_if:funding_source,collaborateur|nullable|string|exists:collaborators,id,user_id,' . Auth::id(),
+                'payment_method' => 'required_if:type,apport|required_if:type,retrait|nullable|in:especes,orange_money,moov_money,wave,mtn_money,virement',
+                'note' => 'nullable|string|max:2000',
+                'date' => 'nullable|date',
             ]);
 
             if ($validator->fails()) {
@@ -271,9 +297,7 @@ class TransactionController extends Controller
 
                     return response()->json([
                         'success' => true,
-                        'message' => $existing->type === 'sale'
-                            ? 'Vente enregistrée avec succès'
-                            : 'Dépense enregistrée avec succès',
+                        'message' => $this->successMessageFor($existing->type),
                         'data' => $existing->type === 'sale'
                             ? $this->loadTransactionForResponse($existing)
                             : $existing,
@@ -406,7 +430,7 @@ class TransactionController extends Controller
                         'data' => $this->loadTransactionForResponse($transaction)
                     ], 201);
 
-                } else { // type === 'expense'
+                } elseif ($request->type === 'expense') {
                     $transactionData = array_merge($transactionData, [
                         'article_id' => null,
                         'quantity' => null,
@@ -420,6 +444,57 @@ class TransactionController extends Controller
                         'success' => true,
                         'message' => 'Dépense enregistrée avec succès',
                         'data' => $transaction
+                    ], 201);
+                } else { // type === 'apport' ou 'retrait'
+                    // Jamais d'article ni de variation sur un apport/retrait
+                    // (section 2 de la spécification) — même si le client en
+                    // envoyait un par erreur, on l'ignore explicitement ici
+                    // plutôt que de le valider puis l'oublier.
+                    $isDeposit = $request->type === 'apport';
+
+                    $transactionData = array_merge($transactionData, [
+                        'article_id' => null,
+                        'variable_id' => null,
+                        'quantity' => null,
+                        'name' => $isDeposit ? 'Apport de fonds' : 'Retrait',
+                        'amount' => $request->amount,
+                        // "origine" n'a de sens que pour un apport ; un
+                        // retrait n'a pas de collaborator_id (il n'est pas
+                        // "retiré par" quelqu'un d'autre que le gérant).
+                        'funding_source' => $isDeposit ? $request->funding_source : null,
+                        'collaborator_id' => ($isDeposit && $request->funding_source === 'collaborateur')
+                            ? $request->collaborator_id
+                            : null,
+                        'payment_method' => $request->payment_method,
+                        'note' => $request->note,
+                    ]);
+
+                    $transaction = Transaction::create($transactionData);
+
+                    // Date/heure modifiable (par défaut "maintenant", déjà
+                    // posé par les timestamps automatiques de la création
+                    // ci-dessus) — contrairement à une vente/dépense, qui ne
+                    // propose pas ce champ aujourd'hui.
+                    if ($request->filled('date')) {
+                        $transaction->created_at = \Illuminate\Support\Carbon::parse($request->date);
+                        $transaction->timestamps = false;
+                        $transaction->save();
+                    }
+
+                    // Pas de ->load('collaborator') ici : Collaborator::wallet
+                    // est à la fois une vraie colonne ET un accessor
+                    // (getWalletAttribute()) qui lit $this->user en interne —
+                    // sérialiser un Collaborator charge donc silencieusement
+                    // le User COMPLET (8 accessors "appended", dont plusieurs
+                    // avec leur propre requête SQL) dans la réponse. Le
+                    // frontend résout déjà le nom d'un collaborateur depuis
+                    // sa propre liste (useCollaboratorShares/getCollaborators())
+                    // à partir de ce collaborator_id brut, sans avoir besoin
+                    // que le backend l'enrichisse ici.
+                    return response()->json([
+                        'success' => true,
+                        'message' => $isDeposit ? 'Apport enregistré avec succès' : 'Retrait enregistré avec succès',
+                        'data' => $transaction,
                     ], 201);
                 }
                 });
@@ -458,9 +533,7 @@ class TransactionController extends Controller
 
                 return response()->json([
                     'success' => true,
-                    'message' => $existing->type === 'sale'
-                        ? 'Vente enregistrée avec succès'
-                        : 'Dépense enregistrée avec succès',
+                    'message' => $this->successMessageFor($existing->type),
                     'data' => $existing->type === 'sale'
                         ? $this->loadTransactionForResponse($existing)
                         : $existing,
@@ -499,6 +572,18 @@ class TransactionController extends Controller
                     'success' => false,
                     'message' => 'Transaction non trouvée'
                 ], 404);
+            }
+
+            // Un apport/retrait ne se modifie pas (pas de besoin exprimé) —
+            // seule la suppression est prévue (section 4 de la
+            // spécification). Refus explicite plutôt que de tomber dans la
+            // branche "dépense" ci-dessous par défaut, qui le traiterait à
+            // tort comme telle.
+            if (in_array($transaction->type, ['apport', 'retrait'], true)) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Un apport ou un retrait ne peut pas être modifié, seulement supprimé'
+                ], 422);
             }
 
             // Validation conditionnelle selon le type de transaction
