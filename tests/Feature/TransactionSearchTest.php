@@ -176,6 +176,29 @@ test('"robe" trouve les ventes de l\'article "Robe wax"', function () {
     expect($response->json('data.0.article_id'))->toBe($article->id);
 });
 
+test('la recherche fonctionne sur TOUS les types de transaction, pas seulement les ventes', function () {
+    $user = makeSearchTestUser();
+    $expense = Transaction::create(['user_id' => $user->id, 'type' => 'expense', 'name' => 'Loyer boutique', 'amount' => 50000]);
+    $deposit = Transaction::create(['user_id' => $user->id, 'type' => 'apport', 'name' => 'Apport de fonds', 'amount' => 100000, 'funding_source' => 'apport_personnel']);
+    $withdrawal = Transaction::create(['user_id' => $user->id, 'type' => 'retrait', 'name' => 'Retrait', 'amount' => 20000]);
+    Transaction::create(['user_id' => $user->id, 'type' => 'expense', 'name' => 'Électricité', 'amount' => 15000]);
+
+    $byLoyer = $this->actingAs($user)->getJson('/api/transactions?q=loyer');
+    $byLoyer->assertStatus(200);
+    expect($byLoyer->json('meta.total'))->toBe(1);
+    expect($byLoyer->json('data.0.id'))->toBe($expense->id);
+
+    $byApport = $this->actingAs($user)->getJson('/api/transactions?q=apport');
+    $byApport->assertStatus(200);
+    expect($byApport->json('meta.total'))->toBe(1);
+    expect($byApport->json('data.0.id'))->toBe($deposit->id);
+
+    $byRetrait = $this->actingAs($user)->getJson('/api/transactions?q=retrait');
+    $byRetrait->assertStatus(200);
+    expect($byRetrait->json('meta.total'))->toBe(1);
+    expect($byRetrait->json('data.0.id'))->toBe($withdrawal->id);
+});
+
 test('"dore" (sans accent) trouve la variation "Doré"', function () {
     $user = makeSearchTestUser();
     $article = makeSearchTestArticle($user, ['name' => 'Robe wax', 'type' => 'variable']);

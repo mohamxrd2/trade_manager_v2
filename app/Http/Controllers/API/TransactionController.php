@@ -290,8 +290,10 @@ class TransactionController extends Controller
     }
 
     /**
-     * Un mot doit correspondre dans AU MOINS UN des champs cherchés — nom
-     * de l'article, nom de la variation, note, numéro de facture ou nom du
+     * Un mot doit correspondre dans AU MOINS UN des champs cherchés — nom de
+     * la transaction elle-même (seul champ texte pour une dépense/un
+     * apport/un retrait : "Loyer", "Apport de fonds", "Retrait"...), nom de
+     * l'article, nom de la variation, note, numéro de facture ou nom du
      * client lié. Insensible à la casse ET aux accents (unaccent() réelle
      * sur PostgreSQL, émulée sur SQLite — voir registerSqliteUnaccentIfNeeded()).
      * % et _ déjà échappés par l'appelant via escapeSearchWord().
@@ -305,7 +307,8 @@ class TransactionController extends Controller
             : "lower(unaccent({$column})) LIKE lower(?)";
 
         $query->where(function ($q) use ($escaped, $wrap) {
-            $q->whereRaw($wrap('transactions.note'), [$escaped])
+            $q->whereRaw($wrap('transactions.name'), [$escaped])
+                ->orWhereRaw($wrap('transactions.note'), [$escaped])
                 ->orWhereHas('article', function ($q2) use ($escaped, $wrap) {
                     $q2->whereRaw($wrap('articles.name'), [$escaped]);
                 })
