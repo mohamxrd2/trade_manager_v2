@@ -263,12 +263,20 @@ class User extends Authenticatable
     }
 
     /**
-     * Get the wallet attribute (calculated_wallet * company_share / 100).
+     * Get the wallet attribute (balance * company_share / 100).
+     *
+     * Base = `balance` (ventes − dépenses + apports − retraits), pas
+     * `calculated_wallet` — décision métier du 26/10/2026 : les apports et
+     * retraits du gérant font désormais partie de l'argent partagé entre
+     * lui et ses collaborateurs (un apport augmente la part de tous selon
+     * leur %, un retrait la diminue). `calculated_wallet` reste inchangé et
+     * continue de servir de base au chiffre d'affaires/bénéfice (voir
+     * getCalculatedWalletAttribute()), qui n'inclut toujours pas les
+     * apports/retraits.
      */
     public function getWalletAttribute(): float
     {
-        $calculatedWallet = $this->calculated_wallet;
-        return (float) bcmul($calculatedWallet, bcdiv($this->company_share, 100, 4), 2);
+        return (float) bcmul($this->balance, bcdiv($this->company_share, 100, 4), 2);
     }
 
     /**
@@ -294,13 +302,13 @@ class User extends Authenticatable
     /**
      * Get the balance attribute (trésorerie réelle, apports/retraits inclus).
      *
-     * Distinct de `calculated_wallet` (ventes − dépenses, INCHANGÉ par cette
-     * fonctionnalité — sert de base au partage des collaborateurs, voir
-     * Collaborator::getWalletAttribute() et compute-shares.ts côté front,
-     * qui ne doivent JAMAIS inclure apports/retraits). `balance` est la
-     * trésorerie réelle affichée sur le Portefeuille/l'Accueil : un apport
-     * n'est pas un bénéfice à partager, mais c'est bien de l'argent
-     * disponible en caisse.
+     * Distinct de `calculated_wallet` (ventes − dépenses SEULEMENT, base du
+     * chiffre d'affaires/bénéfice — inchangé). `balance` est la trésorerie
+     * réelle affichée sur le Portefeuille/l'Accueil, ET — décision métier du
+     * 26/10/2026 — la base de répartition des parts collaborateurs (gérant
+     * compris, voir getWalletAttribute() ci-dessus et
+     * Collaborator::getWalletAttribute()) : un apport augmente donc les
+     * montants de tous les membres selon leur part, un retrait les diminue.
      */
     public function getBalanceAttribute(): float
     {

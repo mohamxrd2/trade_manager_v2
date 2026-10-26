@@ -126,8 +126,8 @@ function makeDepositTestCollaborator(User $user, array $overrides = []): Collabo
 // Règles de calcul (section 3 de la spécification)
 // =============================================================================
 
-test('un apport augmente balance mais ne touche ni total_sale, ni calculated_wallet, ni wallet', function () {
-    $user = makeDepositTestUser();
+test('un apport augmente balance ET wallet (décision du 26/10/2026), mais ne touche ni total_sale ni calculated_wallet', function () {
+    $user = makeDepositTestUser(); // company_share par défaut = 100 %
 
     Transaction::create(['user_id' => $user->id, 'type' => 'sale', 'name' => 'Vente', 'amount' => 50000]);
     Transaction::create(['user_id' => $user->id, 'type' => 'expense', 'name' => 'Loyer', 'amount' => 20000]);
@@ -136,9 +136,10 @@ test('un apport augmente balance mais ne touche ni total_sale, ni calculated_wal
     $balanceBefore = (float) $user->balance;
     $calculatedWalletBefore = (float) $user->calculated_wallet;
     $totalSaleBefore = (float) $user->total_sale;
-    $walletBefore = (float) $user->wallet;
 
     expect($balanceBefore)->toBe(30000.0);
+    // company_share = 100 % par défaut : wallet == balance exactement.
+    expect((float) $user->wallet)->toBe($balanceBefore);
 
     $response = $this->actingAs($user)->postJson('/api/transactions', [
         'type' => 'apport',
@@ -155,7 +156,9 @@ test('un apport augmente balance mais ne touche ni total_sale, ni calculated_wal
     expect((float) $user->total_deposit)->toBe(100000.0);
     expect((float) $user->calculated_wallet)->toBe($calculatedWalletBefore);
     expect((float) $user->total_sale)->toBe($totalSaleBefore);
-    expect((float) $user->wallet)->toBe($walletBefore);
+    // wallet suit désormais balance (pas calculated_wallet) : un apport
+    // augmente donc aussi le montant du gérant, selon sa part.
+    expect((float) $user->wallet)->toBe($balanceBefore + 100000);
 });
 
 test('un retrait diminue balance mais ne touche pas calculated_wallet (le bénéfice)', function () {

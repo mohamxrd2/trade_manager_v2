@@ -52,7 +52,12 @@ class Collaborator extends Model
 
     /**
      * Get the calculated wallet attribute.
-     * Calculé comme : calculated_wallet * (part / 100)
+     * Calculé comme : balance * (part / 100).
+     *
+     * Base = `balance` (ventes − dépenses + apports − retraits), pas
+     * seulement ventes − dépenses — décision métier du 26/10/2026, même
+     * règle que User::getWalletAttribute() (montant du gérant) : un apport
+     * augmente la part de CE collaborateur, un retrait la diminue.
      */
     public function getWalletAttribute(): float
     {
@@ -61,12 +66,6 @@ class Collaborator extends Model
             return 0.0;
         }
 
-        // Calculer le wallet de l'utilisateur
-        $totalSale = $user->transactions()->where('type', 'sale')->sum('amount') ?? 0;
-        $totalExpense = $user->transactions()->where('type', 'expense')->sum('amount') ?? 0;
-        $calculatedWallet = $totalSale - $totalExpense;
-
-        // Calculer la part du collaborateur
-        return (float) bcmul($calculatedWallet, bcdiv($this->part, 100, 4), 2);
+        return (float) bcmul($user->balance, bcdiv($this->part, 100, 4), 2);
     }
 }

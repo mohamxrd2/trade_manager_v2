@@ -1,6 +1,7 @@
 <?php
 
 use App\Models\Collaborator;
+use App\Models\Transaction;
 use App\Models\User;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\DB;
@@ -226,4 +227,124 @@ test('company_share reste cohérent (100 − somme des parts) après create, upd
 
     $this->actingAs($user)->deleteJson("/api/collaborators/{$c2['id']}")->assertStatus(200);
     expect((float) $user->fresh()->company_share)->toBe(100 - $sumParts());
+});
+
+// =============================================================================
+// Montants basés sur le SOLDE, pas sur calculated_wallet — décision métier
+// du 26/10/2026 : un apport augmente le montant de TOUS les membres (gérant
+// compris) selon leur part, un retrait les diminue. Le chiffre d'affaires et
+// le bénéfice (total_sale, calculated_wallet) restent, eux, inchangés.
+// =============================================================================
+
+test('un apport de fonds augmente les montants du gérant ET du collaborateur selon leur part', function () {
+    $user = makeShareTestUser(75.00); // 25 % déjà pris par le collaborateur ci-dessous
+    $collaborator = Collaborator::create(['id' => (string) Str::uuid(), 'user_id' => $user->id, 'name' => 'Awa', 'phone' => '+2250700000001', 'part' => 25]);
+
+    Transaction::create(['user_id' => $user->id, 'type' => 'sale', 'name' => 'Vente', 'amount' => 300000]);
+    Transaction::create(['user_id' => $user->id, 'type' => 'expense', 'name' => 'Loyer', 'amount' => 50000]);
+
+    $user->refresh();
+    expect((float) $user->balance)->toBe(250000.0);
+    expect((float) $user->calculated_wallet)->toBe(250000.0);
+    expect((float) $collaborator->fresh()->wallet)->toBe(62500.0); // 250 000 × 25 %
+    expect((float) $user->wallet)->toBe(187500.0); // 250 000 × 75 %
+
+    Transaction::create(['user_id' => $user->id, 'type' => 'apport', 'name' => 'Apport de fonds', 'amount' => 100000]);
+
+    $user->refresh();
+    expect((float) $user->balance)->toBe(350000.0);
+    // Le chiffre d'affaires/bénéfice n'inclut toujours pas l'apport.
+    expect((float) $user->total_sale)->toBe(300000.0);
+    expect((float) $user->calculated_wallet)->toBe(250000.0);
+    // Mais les montants partagés, oui : base = solde = 350 000.
+    expect((float) $collaborator->fresh()->wallet)->toBe(87500.0); // 350 000 × 25 %
+    expect((float) $user->wallet)->toBe(262500.0); // 350 000 × 75 %
+});
+
+test('un retrait diminue ensuite les montants du gérant ET du collaborateur', function () {
+    $user = makeShareTestUser(75.00);
+    $collaborator = Collaborator::create(['id' => (string) Str::uuid(), 'user_id' => $user->id, 'name' => 'Awa', 'phone' => '+2250700000001', 'part' => 25]);
+
+    Transaction::create(['user_id' => $user->id, 'type' => 'sale', 'name' => 'Vente', 'amount' => 300000]);
+    Transaction::create(['user_id' => $user->id, 'type' => 'expense', 'name' => 'Loyer', 'amount' => 50000]);
+    Transaction::create(['user_id' => $user->id, 'type' => 'apport', 'name' => 'Apport de fonds', 'amount' => 100000]);
+
+    $user->refresh();
+    expect((float) $user->balance)->toBe(350000.0);
+
+    Transaction::create(['user_id' => $user->id, 'type' => 'retrait', 'name' => 'Retrait', 'amount' => 50000]);
+
+    $user->refresh();
+    expect((float) $user->balance)->toBe(300000.0);
+    expect((float) $collaborator->fresh()->wallet)->toBe(75000.0); // 300 000 × 25 %
+    expect((float) $user->wallet)->toBe(225000.0); // 300 000 × 75 %
+    // Toujours inchangé : un retrait n'est pas une dépense.
+    expect((float) $user->calculated_wallet)->toBe(250000.0);
+});
+
+test('supprimer l\'apport ramène les montants calculés sur la base sans apport (ventes − dépenses)', function () {
+    $user = makeShareTestUser(75.00);
+    $collaborator = Collaborator::create(['id' => (string) Str::uuid(), 'user_id' => $user->id, 'name' => 'Awa', 'phone' => '+2250700000001', 'part' => 25]);
+
+    Transaction::create(['user_id' => $user->id, 'type' => 'sale', 'name' => 'Vente', 'amount' => 300000]);
+    Transaction::create(['user_id' => $user->id, 'type' => 'expense', 'name' => 'Loyer', 'amount' => 50000]);
+    $deposit = Transaction::create(['user_id' => $user->id, 'type' => 'apport', 'name' => 'Apport de fonds', 'amount' => 100000]);
+
+    $user->refresh();
+    expect((float) $user->balance)->toBe(350000.0);
+    expect((float) $collaborator->fresh()->wallet)->toBe(87500.0);
+
+    $deposit->delete(); // soft delete — mêmes règles que n'importe quelle transaction
+
+    $user->refresh();
+    expect((float) $user->balance)->toBe(250000.0);
+    expect((float) $collaborator->fresh()->wallet)->toBe(62500.0); // retour à 250 000 × 25 %
+    expect((float) $user->wallet)->toBe(187500.0); // retour à 250 000 × 75 %
+});
+
+test('la somme des montants (gérant + collaborateurs) est toujours EXACTEMENT égale au solde, arrondis absorbés par le gérant', function () {
+    // Pourcentages volontairement non ronds pour forcer un vrai arrondi :
+    // 33,33 % + 33,33 % = 66,66 % pris par les collaborateurs, 33,34 %
+    // restant au gérant (jamais 1/3 pile — la part du gérant absorbe déjà le
+    // reste au niveau du POURCENTAGE, voir CollaboratorController).
+    $user = makeShareTestUser(33.34);
+    $c1 = Collaborator::create(['id' => (string) Str::uuid(), 'user_id' => $user->id, 'name' => 'Awa', 'phone' => '+2250700000001', 'part' => 33.33]);
+    $c2 = Collaborator::create(['id' => (string) Str::uuid(), 'user_id' => $user->id, 'name' => 'Koffi', 'phone' => '+2250700000002', 'part' => 33.33]);
+
+    Transaction::create(['user_id' => $user->id, 'type' => 'sale', 'name' => 'Vente', 'amount' => 100]);
+
+    $user->refresh();
+    expect((float) $user->balance)->toBe(100.0);
+
+    $sum = (float) $user->wallet + (float) $c1->fresh()->wallet + (float) $c2->fresh()->wallet;
+    expect(round($sum, 2))->toBe(100.0);
+});
+
+test('backend : User::wallet = balance × company_share / 100', function () {
+    $user = makeShareTestUser(40.00);
+    Transaction::create(['user_id' => $user->id, 'type' => 'sale', 'name' => 'Vente', 'amount' => 500000]);
+    Transaction::create(['user_id' => $user->id, 'type' => 'apport', 'name' => 'Apport de fonds', 'amount' => 50000]);
+    Transaction::create(['user_id' => $user->id, 'type' => 'retrait', 'name' => 'Retrait', 'amount' => 20000]);
+
+    $user->refresh();
+    $expectedBalance = 500000.0 + 50000.0 - 20000.0;
+    expect((float) $user->balance)->toBe($expectedBalance);
+    expect((float) $user->wallet)->toBe(round($expectedBalance * 0.40, 2));
+});
+
+test('le chiffre d\'affaires et le bénéfice ne changent pas après un apport', function () {
+    $user = makeShareTestUser(100.00);
+    Transaction::create(['user_id' => $user->id, 'type' => 'sale', 'name' => 'Vente', 'amount' => 120000]);
+    Transaction::create(['user_id' => $user->id, 'type' => 'expense', 'name' => 'Loyer', 'amount' => 20000]);
+
+    $user->refresh();
+    $totalSaleBefore = (float) $user->total_sale;
+    $calculatedWalletBefore = (float) $user->calculated_wallet;
+
+    Transaction::create(['user_id' => $user->id, 'type' => 'apport', 'name' => 'Apport de fonds', 'amount' => 75000]);
+
+    $user->refresh();
+    expect((float) $user->total_sale)->toBe($totalSaleBefore);
+    expect((float) $user->total_expense)->toBe(20000.0);
+    expect((float) $user->calculated_wallet)->toBe($calculatedWalletBefore);
 });
