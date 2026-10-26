@@ -4,6 +4,7 @@ namespace App\Http\Controllers\API;
 
 use App\Http\Controllers\Controller;
 use App\Models\Article;
+use App\Models\Operation;
 use App\Models\Transaction;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -487,10 +488,31 @@ class AnalyticsController extends Controller
                 ->whereBetween('created_at', [$start, $end])
                 ->sum('amount') ?? 0;
 
-            $salesCount = Transaction::where('user_id', $userId)
+            // Étape 2 du chantier "paniers multi-articles" : le "nombre de
+            // ventes" compte des OPÉRATIONS (un panier de 3 articles = 1
+            // vente), pas des lignes de transaction — filtré sur
+            // operations.occurred_at (la date métier de l'opération), pas
+            // transactions.created_at. Les MONTANTS (totalSales ci-dessus)
+            // restent inchangés : ils additionnent toujours les lignes.
+            $salesCount = Operation::where('user_id', $userId)
                 ->where('type', 'sale')
-                ->whereBetween('created_at', [$start, $end])
+                ->whereBetween('occurred_at', [$start, $end])
                 ->count();
+
+            // Répartition par moyen de paiement sur la période (montant +
+            // nombre d'opérations) — pour l'écran de statistiques à venir.
+            $paymentMethodBreakdown = Operation::where('user_id', $userId)
+                ->where('type', 'sale')
+                ->whereBetween('occurred_at', [$start, $end])
+                ->selectRaw("COALESCE(payment_method, 'non_precise') as payment_method, SUM(total_amount) as amount, COUNT(*) as count")
+                ->groupBy('payment_method')
+                ->get()
+                ->map(fn ($row) => [
+                    'payment_method' => $row->payment_method,
+                    'amount' => round((float) $row->amount, 2),
+                    'count' => (int) $row->count,
+                ])
+                ->values();
 
             $daysDiff = $start->diffInDays($end) + 1;
 
@@ -515,7 +537,8 @@ class AnalyticsController extends Controller
                     'average_sales_per_day' => round($averageSalesPerDay, 2),
                     'expense_rate' => round($expenseRate, 2),
                     'sales_count' => $salesCount,
-                    'days' => $daysDiff
+                    'days' => $daysDiff,
+                    'payment_methods' => $paymentMethodBreakdown,
                 ]
             ]);
         } catch (\Exception $e) {
