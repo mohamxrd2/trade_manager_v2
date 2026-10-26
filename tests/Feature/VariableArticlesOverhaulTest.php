@@ -96,6 +96,10 @@ function createVariableArticlesSchema(): void
         $table->decimal('sale_price', 15, 2)->nullable();
         $table->string('type');
         $table->string('idempotency_key')->nullable();
+        $table->string('funding_source')->nullable();
+        $table->uuid('collaborator_id')->nullable();
+        $table->string('payment_method')->nullable();
+        $table->text('note')->nullable();
         $table->uuid('operation_id')->nullable();
         $table->timestamps();
         $table->softDeletes();
