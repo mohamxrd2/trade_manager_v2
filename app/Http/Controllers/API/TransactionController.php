@@ -6,8 +6,10 @@ use App\Http\Controllers\Controller;
 use App\Models\Article;
 use App\Models\Transaction;
 use App\Services\NotificationService;
+use App\Services\TransactionSearchParser;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -124,8 +126,35 @@ class TransactionController extends Controller
     /**
      * Display a listing of the transactions for the authenticated user.
      */
-    public function index(): JsonResponse
+    /**
+     * `q`/`date_from`/`date_to` sont additifs et OPTIONNELS : un appel sans
+     * AUCUN paramètre garde exactement le comportement historique (liste
+     * complète, pas de pagination) — le tableau de bord ("Dernières
+     * opérations", voir useTransactionsQuery() côté front) appelle cet
+     * endpoint ainsi et ne doit jamais être affecté par cette fonctionnalité.
+     * `meta` (total/page/per_page/total_pages) est en revanche TOUJOURS
+     * présent, y compris sans pagination (page=1, per_page=total) : c'est
+     * un ajout pur, ignoré par tout code qui ne le lit pas encore.
+     */
+    public function index(Request $request): JsonResponse
     {
+        $validator = Validator::make($request->all(), [
+            'q' => 'nullable|string|max:100',
+            'type' => 'nullable|in:sale,expense,apport,retrait',
+            'date_from' => 'nullable|date_format:Y-m-d',
+            'date_to' => 'nullable|date_format:Y-m-d',
+            'page' => 'nullable|integer|min:1',
+            'per_page' => 'nullable|integer|min:1|max:100',
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Paramètres de recherche invalides',
+                'errors' => $validator->errors(),
+            ], 422);
+        }
+
         try {
             $withSoldQuantity = function ($query) {
                 $query->withSum(['transactions' => function ($q) {
@@ -133,7 +162,7 @@ class TransactionController extends Controller
                 }], 'quantity');
             };
 
-            $transactions = Transaction::where('user_id', Auth::id())
+            $query = Transaction::where('user_id', Auth::id())
                 ->with([
                     // Précharge la relation utilisée par Article::getLowStockAttribute()
                     // (appended, donc calculée pour CHAQUE article à la sérialisation) :
@@ -146,9 +175,40 @@ class TransactionController extends Controller
                     // sans quoi le même N+1 se reproduit côté variation.
                     'variation' => $withSoldQuantity,
                     'variation.article.user.settings',
-                ])
-                ->orderBy('created_at', 'desc')
-                ->get();
+                ]);
+
+            if ($request->filled('type')) {
+                $query->where('type', $request->input('type'));
+            }
+
+            $timezone = 'Africa/Abidjan';
+
+            $q = $request->filled('q') ? trim((string) $request->input('q')) : '';
+            if ($q !== '') {
+                $this->applyTransactionSearch($query, $q, $timezone);
+            }
+
+            if ($request->filled('date_from')) {
+                $query->where('created_at', '>=', Carbon::createFromFormat('Y-m-d', $request->input('date_from'), $timezone)->startOfDay());
+            }
+            if ($request->filled('date_to')) {
+                $query->where('created_at', '<=', Carbon::createFromFormat('Y-m-d', $request->input('date_to'), $timezone)->endOfDay());
+            }
+
+            $query->orderBy('created_at', 'desc');
+
+            $total = (clone $query)->count();
+
+            $paginationRequested = $request->filled('page') || $request->filled('per_page');
+            if ($paginationRequested) {
+                $page = max(1, (int) $request->input('page', 1));
+                $perPage = max(1, (int) $request->input('per_page', 20));
+                $transactions = $query->forPage($page, $perPage)->get();
+            } else {
+                $transactions = $query->get();
+                $page = 1;
+                $perPage = max($total, 1);
+            }
 
             // article.user.settings/variation.article.user.settings ne sont chargés
             // QUE pour alimenter les accessors low_stock/sales_percentage en mémoire
@@ -164,7 +224,13 @@ class TransactionController extends Controller
             return response()->json([
                 'success' => true,
                 'message' => 'Transactions récupérées avec succès',
-                'data' => $transactions
+                'data' => $transactions,
+                'meta' => [
+                    'total' => $total,
+                    'page' => $page,
+                    'per_page' => $perPage,
+                    'total_pages' => $perPage > 0 ? (int) ceil($total / $perPage) : 1,
+                ],
             ]);
         } catch (\Throwable $e) {
             return response()->json([
@@ -173,6 +239,122 @@ class TransactionController extends Controller
                 'error' => $e->getMessage()
             ], 500);
         }
+    }
+
+    /**
+     * Interprète `q` (voir TransactionSearchParser) et ajoute les
+     * contraintes correspondantes à la requête : date reconnue → plage de
+     * created_at ; montant reconnu → égalité stricte SUR amount, PLUS les
+     * résultats texte (les deux se cumulent, voir la spec) ; sinon,
+     * recherche texte multi-mots (TOUS les mots doivent correspondre,
+     * chacun dans N'IMPORTE LEQUEL des champs cherchés).
+     */
+    private function applyTransactionSearch($query, string $q, string $timezone): void
+    {
+        $parsed = TransactionSearchParser::parse($q, $timezone);
+
+        if ($parsed['kind'] === 'day') {
+            $query->whereBetween('created_at', [
+                $parsed['date']->copy()->startOfDay(),
+                $parsed['date']->copy()->endOfDay(),
+            ]);
+            return;
+        }
+
+        if ($parsed['kind'] === 'month') {
+            $query->whereBetween('created_at', [$parsed['start'], $parsed['end']]);
+            return;
+        }
+
+        $this->registerSqliteUnaccentIfNeeded();
+
+        if ($parsed['kind'] === 'amount') {
+            $amount = $parsed['amount'];
+            $words = preg_split('/\s+/', $parsed['text'], -1, PREG_SPLIT_NO_EMPTY) ?: [];
+            $query->where(function ($outer) use ($amount, $words) {
+                $outer->where('amount', $amount);
+                if ($words !== []) {
+                    $outer->orWhere(function ($textGroup) use ($words) {
+                        foreach ($words as $word) {
+                            $this->applySearchWord($textGroup, $word);
+                        }
+                    });
+                }
+            });
+            return;
+        }
+
+        foreach ($parsed['words'] as $word) {
+            $this->applySearchWord($query, $word);
+        }
+    }
+
+    /**
+     * Un mot doit correspondre dans AU MOINS UN des champs cherchés — nom
+     * de l'article, nom de la variation, note, numéro de facture ou nom du
+     * client lié. Insensible à la casse ET aux accents (unaccent() réelle
+     * sur PostgreSQL, émulée sur SQLite — voir registerSqliteUnaccentIfNeeded()).
+     * % et _ déjà échappés par l'appelant via escapeSearchWord().
+     */
+    private function applySearchWord($query, string $word): void
+    {
+        $escaped = $this->escapeSearchWord($word);
+        $isPg = DB::connection()->getDriverName() === 'pgsql';
+        $wrap = fn (string $column) => $isPg
+            ? "unaccent({$column}) ILIKE unaccent(?)"
+            : "lower(unaccent({$column})) LIKE lower(?)";
+
+        $query->where(function ($q) use ($escaped, $wrap) {
+            $q->whereRaw($wrap('transactions.note'), [$escaped])
+                ->orWhereHas('article', function ($q2) use ($escaped, $wrap) {
+                    $q2->whereRaw($wrap('articles.name'), [$escaped]);
+                })
+                ->orWhereHas('variation', function ($q2) use ($escaped, $wrap) {
+                    $q2->whereRaw($wrap('variations.name'), [$escaped]);
+                })
+                ->orWhereHas('invoice', function ($q2) use ($escaped, $wrap) {
+                    $q2->whereRaw($wrap('invoices.invoice_number'), [$escaped])
+                        ->orWhereHas('client', function ($q3) use ($escaped, $wrap) {
+                            $q3->whereRaw($wrap('clients.name'), [$escaped]);
+                        });
+                });
+        });
+    }
+
+    /** Échappe les caractères spéciaux LIKE/ILIKE (% et _) avant de construire le motif `%mot%`. */
+    private function escapeSearchWord(string $word): string
+    {
+        return '%' . addcslashes($word, '\\%_') . '%';
+    }
+
+    /**
+     * SQLite (tests) n'a pas l'extension `unaccent` de PostgreSQL : on
+     * enregistre une fonction PDO équivalente (même table de
+     * correspondance que TransactionSearchParser::stripAccents(), casse
+     * conservée) pour que EXACTEMENT la même requête SQL tourne sur les
+     * deux moteurs. No-op sur PostgreSQL.
+     *
+     * Pas de cache "déjà enregistrée" : en test, chaque test purge et
+     * recrée la connexion SQLite (`DB::purge('sqlite')` dans beforeEach),
+     * ce qui donne une toute NOUVELLE instance PDO sans la fonction — un
+     * drapeau statique qui survivrait à cette purge bloquerait à tort le
+     * ré-enregistrement sur la connexion suivante. sqliteCreateFunction()
+     * accepte sans erreur de redéfinir une fonction déjà connue sur LA
+     * MÊME instance PDO, donc appeler ceci à chaque recherche est sans
+     * risque — et cette méthode ne s'exécute de toute façon jamais en
+     * production (driver pgsql uniquement).
+     */
+    private function registerSqliteUnaccentIfNeeded(): void
+    {
+        if (DB::connection()->getDriverName() !== 'sqlite') {
+            return;
+        }
+
+        DB::connection()->getPdo()->sqliteCreateFunction(
+            'unaccent',
+            fn (?string $value) => $value === null ? null : TransactionSearchParser::stripAccents($value),
+            1
+        );
     }
 
     /**
