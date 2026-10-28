@@ -2,10 +2,14 @@
 
 namespace App\Http\Controllers\API;
 
+use App\Exceptions\BasketStockException;
+use App\Exceptions\BasketValidationException;
 use App\Http\Controllers\Controller;
 use App\Models\Article;
 use App\Models\Transaction;
+use App\Models\Variation;
 use App\Services\NotificationService;
+use App\Services\OperationService;
 use App\Services\TransactionSearchParser;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -117,6 +121,7 @@ class TransactionController extends Controller
             },
             'article.user.settings',
             'variation',
+            'operation',
         ]);
         $transaction->article?->makeHidden('user');
 
@@ -175,6 +180,8 @@ class TransactionController extends Controller
                     // sans quoi le même N+1 se reproduit côté variation.
                     'variation' => $withSoldQuantity,
                     'variation.article.user.settings',
+                    // operation_code (appended, voir Transaction::getOperationCodeAttribute()).
+                    'operation',
                 ]);
 
             if ($request->filled('type')) {
@@ -184,8 +191,9 @@ class TransactionController extends Controller
             $timezone = 'Africa/Abidjan';
 
             $q = $request->filled('q') ? trim((string) $request->input('q')) : '';
+            $codeLikePattern = null;
             if ($q !== '') {
-                $this->applyTransactionSearch($query, $q, $timezone);
+                $codeLikePattern = $this->applyTransactionSearch($query, $q, $timezone);
             }
 
             if ($request->filled('date_from')) {
@@ -195,7 +203,17 @@ class TransactionController extends Controller
                 $query->where('created_at', '<=', Carbon::createFromFormat('Y-m-d', $request->input('date_to'), $timezone)->endOfDay());
             }
 
-            $query->orderBy('created_at', 'desc');
+            if ($codeLikePattern !== null) {
+                // Une transaction n'a pas son propre code — celui de son
+                // opération (sous-requête corrélée, standard SQL) décide du
+                // tri ; une correspondance de code passe avant la date.
+                $query->orderByRaw(
+                    "CASE WHEN (SELECT upper(replace(o.code, '-', '')) FROM operations o WHERE o.id = transactions.operation_id) LIKE ? THEN 0 ELSE 1 END",
+                    [$codeLikePattern]
+                )->orderBy('created_at', 'desc');
+            } else {
+                $query->orderBy('created_at', 'desc');
+            }
 
             $total = (clone $query)->count();
 
@@ -242,14 +260,47 @@ class TransactionController extends Controller
     }
 
     /**
-     * Interprète `q` (voir TransactionSearchParser) et ajoute les
-     * contraintes correspondantes à la requête : date reconnue → plage de
-     * created_at ; montant reconnu → égalité stricte SUR amount, PLUS les
-     * résultats texte (les deux se cumulent, voir la spec) ; sinon,
-     * recherche texte multi-mots (TOUS les mots doivent correspondre,
-     * chacun dans N'IMPORTE LEQUEL des champs cherchés).
+     * Reconnaît d'abord un code d'opération (complet ou par suffixe — voir
+     * TransactionSearchParser::parseOperationCode()/isCodeSuffix()) avant
+     * d'interpréter `q` normalement (date/montant/texte, voir
+     * applyDateAmountOrTextSearch()). Renvoie le pattern LIKE à utiliser pour
+     * trier les vraies correspondances de code en premier (null si `q` n'a
+     * pas ce format — tri par date inchangé).
      */
-    private function applyTransactionSearch($query, string $q, string $timezone): void
+    private function applyTransactionSearch($query, string $q, string $timezone): ?string
+    {
+        $exactCode = TransactionSearchParser::parseOperationCode($q);
+        if ($exactCode !== null) {
+            $query->whereHas('operation', function ($q2) use ($exactCode) {
+                $q2->whereRaw("upper(replace(code, '-', '')) = ?", [$exactCode]);
+            });
+            return $exactCode;
+        }
+
+        if (TransactionSearchParser::isCodeSuffix($q)) {
+            $likePattern = '%' . trim($q);
+            $query->where(function ($outer) use ($likePattern, $q, $timezone) {
+                $outer->whereHas('operation', function ($q2) use ($likePattern) {
+                    $q2->whereRaw("upper(code) LIKE ?", [$likePattern]);
+                })->orWhere(function ($textGroup) use ($q, $timezone) {
+                    $this->applyDateAmountOrTextSearch($textGroup, $q, $timezone);
+                });
+            });
+            return $likePattern;
+        }
+
+        $this->applyDateAmountOrTextSearch($query, $q, $timezone);
+        return null;
+    }
+
+    /**
+     * Date reconnue → plage de created_at ; montant reconnu → égalité
+     * stricte SUR amount, PLUS les résultats texte (les deux se cumulent,
+     * voir la spec) ; sinon, recherche texte multi-mots (TOUS les mots
+     * doivent correspondre, chacun dans N'IMPORTE LEQUEL des champs
+     * cherchés).
+     */
+    private function applyDateAmountOrTextSearch($query, string $q, string $timezone): void
     {
         $parsed = TransactionSearchParser::parse($q, $timezone);
 
@@ -372,7 +423,7 @@ class TransactionController extends Controller
                     $query->withSum(['transactions' => function ($q) {
                         $q->where('type', 'sale');
                     }], 'quantity');
-                }, 'variation'])
+                }, 'variation', 'operation'])
                 ->first();
 
             if (!$transaction) {
@@ -492,22 +543,15 @@ class TransactionController extends Controller
 
             try {
                 return DB::transaction(function () use ($request, $idempotencyKey) {
-                $transactionData = [
-                    'user_id' => Auth::id(),
-                    'type' => $request->type,
-                    'idempotency_key' => $idempotencyKey,
-                ];
-
                 if ($request->type === 'sale') {
-                    // Vérifier que l'article existe et appartient à l'utilisateur
-                    // withSum précalcule transactions_sum_quantity : évite que le
-                    // ->remaining_quantity plus bas (accessor Article::getSoldQuantityAttribute)
-                    // ne déclenche sa propre requête SUM() ad hoc.
+                    // Résout le prix par défaut et préserve le 403 existant
+                    // (article/variation introuvable ou d'un autre compte) —
+                    // OperationService::create() revérifie de toute façon
+                    // l'appartenance au compte ; ce qui n'est PAS dupliqué,
+                    // c'est le verrouillage et la vérification de stock,
+                    // entièrement délégués au service ci-dessous.
                     $article = Article::where('id', $request->article_id)
                         ->where('user_id', Auth::id())
-                        ->withSum(['transactions' => function ($q) {
-                            $q->where('type', 'sale');
-                        }], 'quantity')
                         ->first();
 
                     if (!$article) {
@@ -517,18 +561,10 @@ class TransactionController extends Controller
                         ], 403);
                     }
 
-                    $transactionData['article_id'] = $request->article_id;
-                    $transactionData['quantity'] = $request->quantity;
-
-                    // Si c'est une vente de variation
+                    $variation = null;
                     if ($request->variable_id) {
-                        // lockForUpdate() verrouille la ligne de la variation pour la
-                        // durée de la transaction DB : deux ventes simultanées sur la
-                        // dernière unité s'exécutent alors en série, pas en parallèle,
-                        // donc une seule peut passer le contrôle de stock ci-dessous.
-                        $variation = \App\Models\Variation::where('id', $request->variable_id)
+                        $variation = Variation::where('id', $request->variable_id)
                             ->where('article_id', $request->article_id)
-                            ->lockForUpdate()
                             ->first();
 
                         if (!$variation) {
@@ -537,77 +573,32 @@ class TransactionController extends Controller
                                 'message' => 'Variation non trouvée ou non autorisée'
                             ], 403);
                         }
-
-                        // Recharger la quantité vendue APRÈS le verrou pour ne pas se
-                        // fier à une valeur potentiellement obsolète lue avant lui.
-                        $variation->loadSum(['transactions' => function ($q) {
-                            $q->where('type', 'sale');
-                        }], 'quantity');
-
-                        // Vérifier que la quantité disponible dans la variation est suffisante
-                        // (remaining_quantity peut être négatif ou nul — la comparaison reste
-                        // valide et ne plante jamais, elle refuse juste la vente).
-                        if ($request->quantity > $variation->remaining_quantity) {
-                            return response()->json([
-                                'success' => false,
-                                'message' => "Stock insuffisant pour {$variation->name} : {$variation->remaining_quantity} disponible(s)"
-                            ], 400);
-                        }
-
-                        $transactionData['variable_id'] = $request->variable_id;
-                    } else {
-                        // Vente d'article simple
-                        // Vérifier que la quantité disponible est suffisante
-                        if ($request->quantity > $article->remaining_quantity) {
-                            return response()->json([
-                                'success' => false,
-                                'message' => 'Quantité insuffisante. Quantité disponible: ' . $article->remaining_quantity
-                            ], 400);
-                        }
                     }
 
                     // Gestion du prix de vente — le prix par défaut d'une variation
                     // est SON PROPRE prix, pas celui (min/max) de l'article.
-                    $salePrice = $request->sale_price ?? ($request->variable_id ? $variation->price : $article->sale_price);
-
-                    // Calculer le montant automatiquement
-                    $amount = $salePrice * $request->quantity;
-                    $transactionData['amount'] = $amount;
-                    $transactionData['sale_price'] = $salePrice;
+                    $salePrice = $request->sale_price ?? ($variation ? $variation->price : $article->sale_price);
 
                     // Générer automatiquement le nom de la vente
-                    if ($request->variable_id) {
-                        // Pour les articles variables, inclure le nom de la variation
-                        $generatedName = "Vente de {$request->quantity} " . $article->name . " " . $variation->name;
-                    } else {
-                        // Pour les articles simples, nom standard
-                        $generatedName = "Vente de {$request->quantity} " . $article->name;
-                    }
-                    $transactionData['name'] = $generatedName;
+                    $generatedName = $variation
+                        ? "Vente de {$request->quantity} " . $article->name . " " . $variation->name
+                        : "Vente de {$request->quantity} " . $article->name;
 
-                    // Créer la transaction
-                    $transaction = Transaction::create($transactionData);
+                    $operation = OperationService::create([
+                        'user_id' => Auth::id(),
+                        'type' => 'sale',
+                        'idempotency_key' => $idempotencyKey,
+                        'lines' => [[
+                            'article_id' => $request->article_id,
+                            'variation_id' => $request->variable_id,
+                            'quantity' => $request->quantity,
+                            'unit_price' => $salePrice,
+                            'name' => $generatedName,
+                            'idempotency_key' => $idempotencyKey,
+                        ]],
+                    ]);
 
-                    // Recharger l'article avec les relations nécessaires pour vérifier le stock faible
-                    $article->refresh();
-                    $article->load('user.settings');
-                    $article->loadSum(['transactions' => function ($q) {
-                        $q->where('type', 'sale');
-                    }], 'quantity');
-
-                    if ($request->variable_id) {
-                        // Alerte par variation : le seuil propre à la variation
-                        // (sinon le seuil global) décide, pas le total de l'article.
-                        $variation->refresh();
-                        $variation->load('article.user.settings');
-                        $variation->loadSum(['transactions' => function ($q) {
-                            $q->where('type', 'sale');
-                        }], 'quantity');
-                        NotificationService::checkLowStockVariation($variation);
-                    } else {
-                        // Vérifier si l'article est passé en stock faible et créer une notification
-                        NotificationService::checkLowStock($article);
-                    }
+                    $transaction = $operation->transactions->first();
 
                     return response()->json([
                         'success' => true,
@@ -616,19 +607,21 @@ class TransactionController extends Controller
                     ], 201);
 
                 } elseif ($request->type === 'expense') {
-                    $transactionData = array_merge($transactionData, [
-                        'article_id' => null,
-                        'quantity' => null,
-                        'name' => $request->name,
-                        'amount' => $request->amount,
+                    $operation = OperationService::create([
+                        'user_id' => Auth::id(),
+                        'type' => 'expense',
+                        'idempotency_key' => $idempotencyKey,
+                        'lines' => [[
+                            'amount' => $request->amount,
+                            'name' => $request->name,
+                            'idempotency_key' => $idempotencyKey,
+                        ]],
                     ]);
-
-                    $transaction = Transaction::create($transactionData);
 
                     return response()->json([
                         'success' => true,
                         'message' => 'Dépense enregistrée avec succès',
-                        'data' => $transaction
+                        'data' => $operation->transactions->first()
                     ], 201);
                 } else { // type === 'apport' ou 'retrait'
                     // Jamais d'article ni de variation sur un apport/retrait
@@ -637,24 +630,27 @@ class TransactionController extends Controller
                     // plutôt que de le valider puis l'oublier.
                     $isDeposit = $request->type === 'apport';
 
-                    $transactionData = array_merge($transactionData, [
-                        'article_id' => null,
-                        'variable_id' => null,
-                        'quantity' => null,
-                        'name' => $isDeposit ? 'Apport de fonds' : 'Retrait',
-                        'amount' => $request->amount,
-                        // "origine" n'a de sens que pour un apport ; un
-                        // retrait n'a pas de collaborator_id (il n'est pas
-                        // "retiré par" quelqu'un d'autre que le gérant).
-                        'funding_source' => $isDeposit ? $request->funding_source : null,
-                        'collaborator_id' => ($isDeposit && $request->funding_source === 'collaborateur')
-                            ? $request->collaborator_id
-                            : null,
+                    $operation = OperationService::create([
+                        'user_id' => Auth::id(),
+                        'type' => $request->type,
+                        'idempotency_key' => $idempotencyKey,
                         'payment_method' => $request->payment_method,
-                        'note' => $request->note,
+                        'lines' => [[
+                            'amount' => $request->amount,
+                            'name' => $isDeposit ? 'Apport de fonds' : 'Retrait',
+                            // "origine" n'a de sens que pour un apport ; un
+                            // retrait n'a pas de collaborator_id (il n'est pas
+                            // "retiré par" quelqu'un d'autre que le gérant).
+                            'funding_source' => $isDeposit ? $request->funding_source : null,
+                            'collaborator_id' => ($isDeposit && $request->funding_source === 'collaborateur')
+                                ? $request->collaborator_id
+                                : null,
+                            'note' => $request->note,
+                            'idempotency_key' => $idempotencyKey,
+                        ]],
                     ]);
 
-                    $transaction = Transaction::create($transactionData);
+                    $transaction = $operation->transactions->first();
 
                     // Date/heure modifiable (par défaut "maintenant", déjà
                     // posé par les timestamps automatiques de la création
@@ -683,6 +679,24 @@ class TransactionController extends Controller
                     ], 201);
                 }
                 });
+            } catch (BasketStockException $e) {
+                // Même format de message qu'avant le passage par
+                // OperationService — ce chemin (une seule ligne) n'a toujours
+                // qu'une seule entrée dans $e->lines.
+                $line = $e->lines[0];
+                $message = $request->variable_id
+                    ? "Stock insuffisant pour {$line['name']} : {$line['available']} disponible(s)"
+                    : 'Quantité insuffisante. Quantité disponible: ' . $line['available'];
+
+                return response()->json([
+                    'success' => false,
+                    'message' => $message,
+                ], 400);
+            } catch (BasketValidationException $e) {
+                return response()->json([
+                    'success' => false,
+                    'message' => $e->getMessage(),
+                ], 422);
             } catch (\Illuminate\Database\QueryException $e) {
                 // Course entre deux tentatives quasi simultanées d'UNE MÊME
                 // soumission (même Idempotency-Key) : la vérification
@@ -945,6 +959,22 @@ class TransactionController extends Controller
                     'success' => false,
                     'message' => 'Non autorisé à supprimer cette transaction'
                 ], 403);
+            }
+
+            // Une ligne d'une opération à PLUSIEURS lignes (panier
+            // multi-articles) ne se supprime pas isolément : ça désyncroniserait
+            // operation.total_amount et changerait silencieusement ce qu'un
+            // reçu déjà émis (code imprimé) est censé représenter. Seule
+            // l'opération complète se supprime (DELETE /api/operations/{id}).
+            if ($transaction->operation_id) {
+                $lineCount = Transaction::where('operation_id', $transaction->operation_id)->count();
+                if ($lineCount > 1) {
+                    return response()->json([
+                        'success' => false,
+                        'message' => 'Supprimez l\'opération complète',
+                        'operation_id' => $transaction->operation_id,
+                    ], 422);
+                }
             }
 
             // Une vente générée par une facture PAYÉE ne se supprime pas

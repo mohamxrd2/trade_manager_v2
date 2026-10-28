@@ -10,10 +10,12 @@ use App\Http\Controllers\API\HealthController;
 use App\Http\Controllers\API\InvoiceController;
 use App\Http\Controllers\API\NotificationController;
 use App\Http\Controllers\API\OnboardingController;
+use App\Http\Controllers\API\OperationController;
 use App\Http\Controllers\API\SocialAuthController;
 use App\Http\Controllers\API\TransactionController;
 use App\Http\Controllers\API\UserProfileController;
 use App\Http\Controllers\API\UserSettingController;
+use App\Http\Controllers\API\ReceiptSettingController;
 use App\Http\Controllers\API\VariationController;
 use Illuminate\Support\Facades\Route;
 
@@ -81,6 +83,13 @@ Route::middleware(['auth:sanctum'])->group(function () {
     Route::delete('/transactions/{id}', [TransactionController::class, 'destroy']);
     Route::post('/transactions/{id}/restore', [TransactionController::class, 'restore']);
     Route::delete('/transactions/all', [TransactionController::class, 'deleteAll']);
+
+    // Operations routes (paniers multi-articles — étape 2)
+    Route::get('/operations', [OperationController::class, 'index']);
+    Route::get('/operations/{id}', [OperationController::class, 'show']);
+    Route::post('/operations', [OperationController::class, 'store']);
+    Route::delete('/operations/{id}', [OperationController::class, 'destroy']);
+    Route::post('/operations/{id}/restore', [OperationController::class, 'restore']);
     
     // Collaborators routes
     Route::get('/collaborators', [CollaboratorController::class, 'index']);
@@ -115,7 +124,11 @@ Route::middleware(['auth:sanctum'])->group(function () {
     // User settings routes
     Route::get('/user/settings', [UserSettingController::class, 'index']);
     Route::put('/user/settings', [UserSettingController::class, 'update']);
-    
+
+    // Receipt (ticket de caisse) display settings routes
+    Route::get('/receipt-settings', [ReceiptSettingController::class, 'index']);
+    Route::put('/receipt-settings', [ReceiptSettingController::class, 'update']);
+
     // Notifications routes
     Route::get('/notifications', [NotificationController::class, 'index']);
     Route::get('/notifications/unread-count', [NotificationController::class, 'unreadCount']);

@@ -17,7 +17,7 @@ use Illuminate\Support\Str;
 */
 function createCollaboratorShareTestSchema(): void
 {
-    foreach (['notifications', 'user_settings', 'collaborators', 'transactions', 'articles', 'users'] as $table) {
+    foreach (['notifications', 'user_settings', 'collaborators', 'transactions', 'operations', 'operation_counters', 'articles', 'users'] as $table) {
         Schema::dropIfExists($table);
     }
 
@@ -97,8 +97,48 @@ function createCollaboratorShareTestSchema(): void
         $table->decimal('sale_price', 15, 2)->nullable();
         $table->string('type');
         $table->string('idempotency_key')->nullable();
+        $table->string('funding_source')->nullable();
+        $table->uuid('collaborator_id')->nullable();
+        $table->string('payment_method')->nullable();
+        $table->text('note')->nullable();
+        $table->uuid('operation_id')->nullable();
         $table->timestamps();
         $table->softDeletes();
+    });
+
+    // operations/operation_counters : Transaction::booted() crée
+    // automatiquement une opération à une ligne pour CHAQUE transaction
+    // créée (étape 1 du chantier "paniers multi-articles", voir
+    // Transaction::creating()) — ces deux tables doivent donc exister dans
+    // le schéma minimal de TOUT fichier de test qui crée une Transaction,
+    // pas seulement ceux qui testent les opérations elles-mêmes.
+    Schema::create('operations', function (Blueprint $table) {
+        $table->uuid('id')->primary();
+        $table->uuid('user_id');
+        $table->uuid('created_by_user_id')->nullable();
+        $table->string('type');
+        $table->string('code');
+        $table->string('payment_method')->nullable();
+        $table->decimal('total_amount', 12, 2);
+        $table->decimal('amount_received', 12, 2)->nullable();
+        $table->decimal('change_given', 12, 2)->nullable();
+        $table->uuid('client_id')->nullable();
+        $table->uuid('invoice_id')->nullable();
+        $table->text('note')->nullable();
+        $table->timestamp('occurred_at');
+        $table->string('idempotency_key')->nullable();
+        $table->timestamps();
+        $table->softDeletes();
+    });
+
+    Schema::create('operation_counters', function (Blueprint $table) {
+        $table->id();
+        $table->uuid('user_id');
+        $table->string('prefix', 1);
+        $table->date('day');
+        $table->unsignedInteger('last_value')->default(0);
+        $table->timestamps();
+        $table->unique(['user_id', 'prefix', 'day']);
     });
 }
 

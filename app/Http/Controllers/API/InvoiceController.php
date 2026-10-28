@@ -2,6 +2,8 @@
 
 namespace App\Http\Controllers\API;
 
+use App\Exceptions\BasketStockException;
+use App\Exceptions\BasketValidationException;
 use App\Exceptions\InsufficientStockException;
 use App\Http\Controllers\Controller;
 use App\Models\Article;
@@ -11,6 +13,7 @@ use App\Models\InvoiceItem;
 use App\Models\Transaction;
 use App\Models\Variation;
 use App\Services\NotificationService;
+use App\Services\OperationService;
 use Barryvdh\DomPDF\Facade\Pdf;
 use Illuminate\Database\QueryException;
 use Illuminate\Http\JsonResponse;
@@ -1127,84 +1130,38 @@ class InvoiceController extends Controller
             return;
         }
 
-        $qtyByArticle = [];
-        $qtyByVariation = [];
-        foreach ($items as $item) {
-            $qtyByArticle[$item->article_id] = ($qtyByArticle[$item->article_id] ?? 0) + $item->quantity;
-            if ($item->variation_id) {
-                $qtyByVariation[$item->variation_id] = ($qtyByVariation[$item->variation_id] ?? 0) + $item->quantity;
-            }
-        }
+        // Une opération, une ligne par article facturé — verrouillage,
+        // vérification de stock (agrégée par article/variation, donc une
+        // survente est détectée même si le même article apparaît sur
+        // plusieurs lignes) et création des Transaction sont entièrement
+        // délégués à OperationService::create() (voir ce service). Les deux
+        // exceptions qu'il peut lever sont retraduites ici en
+        // InsufficientStockException, le seul type que les DEUX appelants de
+        // cette méthode (store()/updateStatus()) savent déjà attraper.
+        $lines = $items->map(fn (InvoiceItem $item) => [
+            'article_id' => $item->article_id,
+            'variation_id' => $item->variation_id,
+            'quantity' => $item->quantity,
+            'unit_price' => $item->unit_price,
+            'amount' => $item->total_line,
+            'name' => "Vente: {$item->name_snapshot} (Facture {$invoice->invoice_number})",
+        ])->all();
 
-        // Verrouille les lignes articles concernées jusqu'à la fin de la transaction
-        // englobante, bloquant toute requête concurrente sur les mêmes articles.
-        $articles = Article::whereIn('id', array_keys($qtyByArticle))
-            ->where('user_id', $invoice->user_id)
-            ->lockForUpdate()
-            ->get()
-            ->keyBy('id');
-
-        // Même principe au niveau variation : c'est elle, pas l'article, qui
-        // porte le stock réel d'un article variable.
-        $variations = empty($qtyByVariation)
-            ? collect()
-            : Variation::whereIn('id', array_keys($qtyByVariation))
-                ->lockForUpdate()
-                ->get()
-                ->keyBy('id');
-
-        $errors = [];
-        foreach ($qtyByArticle as $articleId => $requestedQty) {
-            $article = $articles->get($articleId);
-
-            if (!$article) {
-                $errors[] = "Un article de la facture est introuvable ou ne vous appartient plus.";
-                continue;
-            }
-
-            // Le stock d'un article variable est vérifié par variation (ci-dessous) ;
-            // seul un article simple a un stock propre à vérifier ici.
-            if ($article->type === 'simple' && $article->remaining_quantity < $requestedQty) {
-                $errors[] = "Stock insuffisant pour \"{$article->name}\". Disponible: {$article->remaining_quantity}, Demandé: {$requestedQty}";
-            }
-        }
-
-        foreach ($qtyByVariation as $variationId => $requestedQty) {
-            $variation = $variations->get($variationId);
-
-            if (!$variation) {
-                $errors[] = "Une variation de la facture est introuvable.";
-                continue;
-            }
-
-            if ($variation->remaining_quantity < $requestedQty) {
-                $errors[] = "Stock insuffisant pour {$variation->name} : {$variation->remaining_quantity} disponible(s), demandé : {$requestedQty}";
-            }
-        }
-
-        if (!empty($errors)) {
-            throw new InsufficientStockException($errors);
-        }
-
-        foreach ($items as $item) {
-            Transaction::create([
+        try {
+            OperationService::create([
                 'user_id' => $invoice->user_id,
-                'article_id' => $item->article_id,
-                'variable_id' => $item->variation_id,
-                'invoice_id' => $invoice->id,
-                'name' => "Vente: {$item->name_snapshot} (Facture {$invoice->invoice_number})",
                 'type' => 'sale',
-                'quantity' => $item->quantity,
-                'amount' => $item->total_line,
-                'sale_price' => $item->unit_price,
+                'invoice_id' => $invoice->id,
+                'client_id' => $invoice->client_id,
+                'lines' => $lines,
             ]);
-        }
-
-        // Alerte de stock faible par variation pour chaque ligne concernée.
-        foreach ($variations as $variation) {
-            $variation->refresh();
-            $variation->load('article.user.settings');
-            NotificationService::checkLowStockVariation($variation);
+        } catch (BasketStockException $e) {
+            throw new InsufficientStockException(array_map(
+                fn (array $line) => "Stock insuffisant pour \"{$line['name']}\". Disponible: {$line['available']}, Demandé: {$line['requested']}",
+                $e->lines
+            ));
+        } catch (BasketValidationException $e) {
+            throw new InsufficientStockException([$e->getMessage()]);
         }
     }
 

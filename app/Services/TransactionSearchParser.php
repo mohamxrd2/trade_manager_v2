@@ -16,9 +16,12 @@ use Carbon\Carbon;
  *   3. Texte libre (tous les mots doivent correspondre, voir
  *      TransactionController::applyTextSearch())
  *
- * N'interprète PAS de "code de transaction" : `transactions` n'a pas de
- * colonne `code`/`reference` (vérifié en base, voir le diagnostic de
- * livraison) — seul l'UUID `id` existe, jamais saisi par un utilisateur.
+ * Depuis l'étape 2 du chantier "paniers multi-articles" (`operations.code`,
+ * format {Préfixe}-{AAMMJJ}-{compteur}, voir OperationCodeGenerator),
+ * reconnaît aussi un code d'opération complet ou ses derniers chiffres —
+ * voir parseOperationCode()/isCodeSuffix() ci-dessous. Reste séparé de
+ * parse() : un code se recoupe avec les transactions/opérations elles-mêmes
+ * (via operation_id), pas avec une propriété du texte libre lui-même.
  */
 class TransactionSearchParser
 {
@@ -182,6 +185,31 @@ class TransactionSearchParser
     private static function normalizeWord(string $word): string
     {
         return rtrim(mb_strtolower(self::stripAccents($word)), '.');
+    }
+
+    /**
+     * Reconnaît un code d'opération COMPLET dans `q`, avec ou sans tirets,
+     * insensible à la casse ("V-261026-0042", "v2610260042") — renvoie le
+     * code normalisé (majuscules, sans tiret) à comparer à
+     * upper(replace(operations.code, '-', '')), ou null si `q` n'a pas ce
+     * format.
+     */
+    public static function parseOperationCode(string $q): ?string
+    {
+        $compact = strtoupper(str_replace('-', '', trim($q)));
+
+        return preg_match('/^[VDAR]\d{6}\d{4}$/', $compact) ? $compact : null;
+    }
+
+    /**
+     * `q` est un fragment purement numérique court (1 à 4 chiffres) — les
+     * derniers chiffres d'un code ("0042"), à chercher en SUFFIXE de
+     * `operations.code`, cumulé à la recherche texte habituelle (un montant
+     * ou un nom de produit qui contient ce nombre doit aussi remonter).
+     */
+    public static function isCodeSuffix(string $q): bool
+    {
+        return (bool) preg_match('/^\d{1,4}$/', trim($q));
     }
 
     /**
