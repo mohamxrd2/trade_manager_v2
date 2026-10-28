@@ -138,7 +138,7 @@ class TeamMemberController extends Controller
             'success' => true,
             'message' => 'Membre créé avec succès',
             'data' => [
-                'member' => $member->fresh(['id', 'first_name', 'last_name', 'username', 'email', 'phone', 'role', 'status']),
+                'member' => $member->fresh(),
                 'login_code' => $code,
             ],
         ], 201);
