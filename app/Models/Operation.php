@@ -75,4 +75,23 @@ class Operation extends Model
     {
         return $this->belongsTo(User::class, 'created_by_user_id');
     }
+
+    /**
+     * "Caissier : {nom}" du ticket de caisse — PAS dans $appends (coûterait
+     * une requête par ligne sur GET /api/operations, qui n'a pas besoin de
+     * cette info) : ajouté explicitement via append('author_name') par
+     * OperationController::loadOperationForResponse(), utilisé seulement
+     * par les réponses à une seule opération (show/store).
+     */
+    public function getAuthorNameAttribute(): ?string
+    {
+        $author = $this->createdBy ?: $this->user;
+        if (!$author) {
+            return null;
+        }
+
+        $name = trim(($author->first_name ?? '') . ' ' . ($author->last_name ?? ''));
+
+        return $name !== '' ? $name : ($author->username ?? null);
+    }
 }

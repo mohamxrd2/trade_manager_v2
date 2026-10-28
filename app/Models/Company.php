@@ -23,8 +23,10 @@ class Company extends Model
         'sector',
         'headquarters',
         'email',
+        'phone',
         'legal_status',
         'bank_account_number',
+        'tax_id',
         'logo',
     ];
 

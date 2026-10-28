@@ -62,12 +62,18 @@ class OperationController extends Controller
             'transactions.article',
             'transactions.variation',
             'client',
+            'createdBy',
         ]);
 
         $operation->transactions->each(function ($transaction) {
             $transaction->article?->makeHidden('user');
             $transaction->variation?->makeHidden('article');
         });
+
+        // "Caissier : {nom}" sur le ticket de caisse — voir le commentaire de
+        // l'accesseur sur le modèle pour pourquoi ce n'est pas dans $appends.
+        $operation->append('author_name');
+        $operation->makeHidden(['createdBy', 'user']);
 
         return $operation;
     }

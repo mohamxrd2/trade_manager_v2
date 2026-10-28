@@ -241,10 +241,12 @@ class CompanyController extends Controller
             $validator = Validator::make($request->all(), [
                 'name' => $company->exists ? 'sometimes|required|string|max:255' : 'required|string|max:255',
                 'email' => 'sometimes|nullable|email|max:255',
+                'phone' => 'sometimes|nullable|string|max:30',
                 'sector' => 'sometimes|nullable|string|max:255',
                 'headquarters' => 'sometimes|nullable|string|max:500',
                 'legal_status' => 'sometimes|nullable|string|max:255',
                 'bank_account_number' => 'sometimes|nullable|string|max:50',
+                'tax_id' => 'sometimes|nullable|string|max:50',
                 'logo' => 'sometimes|nullable|image|mimes:jpg,jpeg,png,webp|max:2048',
             ], [
                 'name.required' => 'Le nom de l\'entreprise est obligatoire',
@@ -263,7 +265,7 @@ class CompanyController extends Controller
             }
 
             // Mettre à jour les autres champs
-            $fields = ['name', 'email', 'sector', 'headquarters', 'legal_status', 'bank_account_number'];
+            $fields = ['name', 'email', 'phone', 'sector', 'headquarters', 'legal_status', 'bank_account_number', 'tax_id'];
             foreach ($fields as $field) {
                 if ($request->has($field)) {
                     $company->$field = $request->$field;

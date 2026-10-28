@@ -117,6 +117,14 @@ class User extends Authenticatable
     }
 
     /**
+     * Get the receipt (cash register ticket) display preferences for the user.
+     */
+    public function receiptSetting(): \Illuminate\Database\Eloquent\Relations\HasOne
+    {
+        return $this->hasOne(ReceiptSetting::class);
+    }
+
+    /**
      * Get the notifications for the user.
      */
     public function notifications(): HasMany

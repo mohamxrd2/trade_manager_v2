@@ -15,6 +15,7 @@ use App\Http\Controllers\API\SocialAuthController;
 use App\Http\Controllers\API\TransactionController;
 use App\Http\Controllers\API\UserProfileController;
 use App\Http\Controllers\API\UserSettingController;
+use App\Http\Controllers\API\ReceiptSettingController;
 use App\Http\Controllers\API\VariationController;
 use Illuminate\Support\Facades\Route;
 
@@ -123,7 +124,11 @@ Route::middleware(['auth:sanctum'])->group(function () {
     // User settings routes
     Route::get('/user/settings', [UserSettingController::class, 'index']);
     Route::put('/user/settings', [UserSettingController::class, 'update']);
-    
+
+    // Receipt (ticket de caisse) display settings routes
+    Route::get('/receipt-settings', [ReceiptSettingController::class, 'index']);
+    Route::put('/receipt-settings', [ReceiptSettingController::class, 'update']);
+
     // Notifications routes
     Route::get('/notifications', [NotificationController::class, 'index']);
     Route::get('/notifications/unread-count', [NotificationController::class, 'unreadCount']);
