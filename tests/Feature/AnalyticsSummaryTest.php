@@ -1,8 +1,10 @@
 <?php
 
+use App\Models\Article;
 use App\Models\Operation;
 use App\Models\Transaction;
 use App\Models\User;
+use App\Models\Variation;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
@@ -319,6 +321,43 @@ test('la variation vs la période précédente est calculée correctement', func
     expect($response->json('data.kpis.revenue.value'))->toEqual(10000.0);
     expect($response->json('data.kpis.revenue.previous'))->toEqual(8000.0);
     expect($response->json('data.kpis.revenue.change_percent'))->toEqual(25.0);
+});
+
+/*
+|--------------------------------------------------------------------------
+| Top variations — un article simple apparaît sous son nom seul, une
+| variation sous "article + variation" ; article_id toujours présent (lien
+| frontend vers la fiche article). Requête testée sur SQLite ET Postgres :
+| une ambiguïté de colonne "article_id" (transactions vs variations) dans
+| le GROUP BY ne plante que sous Postgres, jamais sous SQLite.
+|--------------------------------------------------------------------------
+*/
+test('le top variations distingue article simple et variation, avec article_id pour le lien frontend', function () {
+    $user = summaryUser();
+    $now = Carbon::now();
+
+    $simple = Article::create(['user_id' => $user->id, 'name' => 'Savon', 'sale_price' => 1000, 'quantity' => 50, 'type' => 'simple']);
+    $variable = Article::create(['user_id' => $user->id, 'name' => 'Robe wax', 'sale_price' => 0, 'quantity' => 0, 'type' => 'variable']);
+    $variation = Variation::create(['article_id' => $variable->id, 'name' => 'Taille M', 'quantity' => 10]);
+
+    $op = makeSaleOperation($user, ['total_amount' => 15000, 'occurred_at' => $now]);
+    makeLine($op, 2000, quantity: 2, overrides: ['article_id' => $simple->id, 'name' => 'Savon']);
+    makeLine($op, 13000, quantity: 1, overrides: ['article_id' => $variable->id, 'variable_id' => $variation->id, 'name' => 'Robe wax']);
+
+    $response = $this->actingAs($user)->getJson('/api/analytics/summary?period=7d');
+    $response->assertStatus(200);
+
+    $rows = collect($response->json('data.top_variations'));
+    $simpleRow = $rows->firstWhere('article_name', 'Savon');
+    $variationRow = $rows->firstWhere('variation_name', 'Taille M');
+
+    expect($simpleRow['article_id'])->toBe($simple->id);
+    expect($simpleRow['variation_name'])->toBeNull();
+    expect($simpleRow['quantity'])->toBe(2);
+
+    expect($variationRow['article_id'])->toBe($variable->id);
+    expect($variationRow['article_name'])->toBe('Robe wax');
+    expect($variationRow['revenue'])->toEqual(13000.0);
 });
 
 /*

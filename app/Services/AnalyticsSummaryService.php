@@ -328,17 +328,19 @@ class AnalyticsSummaryService
             ->whereBetween('operations.occurred_at', [$start, $end])
             ->selectRaw('
                 COALESCE(transactions.variable_id, transactions.article_id) as group_key,
+                transactions.article_id as article_id,
                 COALESCE(articles.name, transactions.name) as article_name,
                 variations.name as variation_name,
                 SUM(transactions.quantity) as total_quantity,
                 SUM(transactions.amount) as total_amount
             ')
-            ->groupBy('group_key', 'article_name', 'variation_name')
+            ->groupBy('group_key', 'transactions.article_id', 'article_name', 'variation_name')
             ->orderByDesc('total_amount')
             ->limit(10)
             ->get();
 
         return $rows->map(fn ($row) => [
+            'article_id' => $row->article_id,
             'article_name' => $row->article_name,
             'variation_name' => $row->variation_name,
             'quantity' => (int) $row->total_quantity,
