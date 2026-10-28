@@ -144,6 +144,7 @@ Route::middleware(['auth:sanctum'])->group(function () {
     Route::get('/analytics/kpis', [AnalyticsController::class, 'kpis']);
     Route::get('/analytics/transactions', [AnalyticsController::class, 'transactions']);
     Route::get('/analytics/predictions', [AnalyticsController::class, 'predictions']);
+    Route::get('/analytics/summary', [AnalyticsController::class, 'summary']);
     
     // =========================================================================
     // CLIENTS & FACTURATION
