@@ -2,6 +2,8 @@
 
 namespace App\Http\Middleware;
 
+use App\Models\Company;
+use App\Support\CurrentAccount;
 use Closure;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
@@ -36,8 +38,9 @@ class EnsureCompanyInvoiceReady
             ], 401);
         }
 
-        // Charger l'entreprise de l'utilisateur
-        $company = $user->company;
+        // Charger l'entreprise du COMPTE (pas celle du membre connecté, qui
+        // n'a pas sa propre entreprise — voir User::accountId()).
+        $company = Company::where('user_id', CurrentAccount::id())->first();
 
         if (!$company) {
             Log::warning('Invoice access blocked: No company', [

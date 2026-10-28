@@ -3,6 +3,8 @@
 namespace App\Http\Controllers\API;
 
 use App\Http\Controllers\Controller;
+use App\Support\CurrentAccount;
+use App\Support\Permissions;
 use App\Models\Article;
 use App\Models\InvoiceItem;
 use App\Models\Transaction;
@@ -19,10 +21,14 @@ class VariationController extends Controller
      */
     public function index(): JsonResponse
     {
+        if (Auth::user()->cannot(Permissions::STOCK_VIEW)) {
+            return response()->json(['success' => false, 'message' => 'Non autorisé'], 403);
+        }
+
         try {
             // Récupérer toutes les variations des articles de l'utilisateur connecté
             $variations = Variation::whereHas('article', function ($query) {
-                $query->where('user_id', Auth::id());
+                $query->where('user_id', CurrentAccount::id());
             })
             ->withSum('transactions', 'quantity')
             ->with([
@@ -54,9 +60,13 @@ class VariationController extends Controller
      */
     public function show(string $id): JsonResponse
     {
+        if (Auth::user()->cannot(Permissions::STOCK_VIEW)) {
+            return response()->json(['success' => false, 'message' => 'Non autorisé'], 403);
+        }
+
         try {
             $variation = Variation::whereHas('article', function ($query) {
-                $query->where('user_id', Auth::id());
+                $query->where('user_id', CurrentAccount::id());
             })
             ->withSum('transactions', 'quantity')
             ->with([
@@ -94,6 +104,10 @@ class VariationController extends Controller
      */
     public function store(Request $request): JsonResponse
     {
+        if (Auth::user()->cannot(Permissions::STOCK_EDIT)) {
+            return response()->json(['success' => false, 'message' => 'Non autorisé'], 403);
+        }
+
         try {
             $validator = Validator::make($request->all(), [
                 'article_id' => 'required|string|exists:articles,id',
@@ -129,7 +143,7 @@ class VariationController extends Controller
 
             // Vérifier que l'article existe et appartient à l'utilisateur
             $article = Article::where('id', $request->article_id)
-                ->where('user_id', Auth::id())
+                ->where('user_id', CurrentAccount::id())
                 ->first();
 
             if (!$article) {
@@ -198,6 +212,10 @@ class VariationController extends Controller
      */
     public function update(Request $request, string $id): JsonResponse
     {
+        if (Auth::user()->cannot(Permissions::STOCK_EDIT)) {
+            return response()->json(['success' => false, 'message' => 'Non autorisé'], 403);
+        }
+
         try {
             $variation = Variation::find($id);
 
@@ -210,7 +228,7 @@ class VariationController extends Controller
 
             // Vérifier que l'article parent appartient à l'utilisateur
             $article = Article::where('id', $variation->article_id)
-                ->where('user_id', Auth::id())
+                ->where('user_id', CurrentAccount::id())
                 ->first();
 
             if (!$article) {
@@ -287,6 +305,10 @@ class VariationController extends Controller
      */
     public function destroy(Request $request, string $id): JsonResponse
     {
+        if (Auth::user()->cannot(Permissions::STOCK_EDIT)) {
+            return response()->json(['success' => false, 'message' => 'Non autorisé'], 403);
+        }
+
         try {
             $variation = Variation::find($id);
 
@@ -299,7 +321,7 @@ class VariationController extends Controller
 
             // Vérifier que l'article parent appartient à l'utilisateur
             $article = Article::where('id', $variation->article_id)
-                ->where('user_id', Auth::id())
+                ->where('user_id', CurrentAccount::id())
                 ->first();
 
             if (!$article) {

@@ -4,6 +4,7 @@ namespace App\Http\Controllers\API;
 
 use App\Http\Controllers\Controller;
 use App\Models\Notification;
+use App\Support\CurrentAccount;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
@@ -30,7 +31,7 @@ class NotificationController extends Controller
             $page = $request->get('page', 1);
             $unreadOnly = $request->boolean('unread_only', false);
 
-            $query = Notification::where('user_id', $user->id)
+            $query = Notification::where('user_id', CurrentAccount::id())
                 ->with('article:id,name,type')
                 ->orderBy('created_at', 'desc');
 
@@ -51,7 +52,7 @@ class NotificationController extends Controller
                         'total' => $notifications->total(),
                         'last_page' => $notifications->lastPage(),
                     ],
-                    'unread_count' => Notification::where('user_id', $user->id)
+                    'unread_count' => Notification::where('user_id', CurrentAccount::id())
                         ->where('read', false)
                         ->count(),
                 ]
@@ -82,7 +83,7 @@ class NotificationController extends Controller
             }
 
             $notification = Notification::where('id', $id)
-                ->where('user_id', $user->id)
+                ->where('user_id', CurrentAccount::id())
                 ->first();
 
             if (!$notification) {
@@ -124,7 +125,7 @@ class NotificationController extends Controller
                 ], 401);
             }
 
-            $count = Notification::where('user_id', $user->id)
+            $count = Notification::where('user_id', CurrentAccount::id())
                 ->where('read', false)
                 ->update(['read' => true]);
 
@@ -159,7 +160,7 @@ class NotificationController extends Controller
             }
 
             $notification = Notification::where('id', $id)
-                ->where('user_id', $user->id)
+                ->where('user_id', CurrentAccount::id())
                 ->first();
 
             if (!$notification) {
@@ -200,7 +201,7 @@ class NotificationController extends Controller
                 ], 401);
             }
 
-            $count = Notification::where('user_id', $user->id)
+            $count = Notification::where('user_id', CurrentAccount::id())
                 ->where('read', false)
                 ->count();
 

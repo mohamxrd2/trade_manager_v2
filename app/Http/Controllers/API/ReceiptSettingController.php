@@ -4,6 +4,8 @@ namespace App\Http\Controllers\API;
 
 use App\Http\Controllers\Controller;
 use App\Models\ReceiptSetting;
+use App\Support\CurrentAccount;
+use App\Support\Permissions;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
@@ -30,7 +32,9 @@ class ReceiptSettingController extends Controller
 
     public function index(): JsonResponse
     {
-        $user = Auth::user();
+        if (Auth::user()->cannot(Permissions::SETTINGS_MANAGE)) {
+            return response()->json(['success' => false, 'message' => 'Non autorisé'], 403);
+        }
 
         // Toujours une requête fraîche (jamais `$user->receiptSetting`) :
         // Auth::user() peut être le MÊME objet PHP réutilisé sur plusieurs
@@ -39,7 +43,7 @@ class ReceiptSettingController extends Controller
         // suivant la croirait encore absente alors qu'elle existe déjà en
         // base, provoquant un doublon (violation de la contrainte unique
         // sur user_id). firstOrCreate() interroge la base à chaque appel.
-        $settings = ReceiptSetting::firstOrCreate(['user_id' => $user->id], self::DEFAULTS);
+        $settings = ReceiptSetting::firstOrCreate(['user_id' => CurrentAccount::id()], self::DEFAULTS);
 
         return response()->json([
             'success' => true,
@@ -49,7 +53,9 @@ class ReceiptSettingController extends Controller
 
     public function update(Request $request): JsonResponse
     {
-        $user = Auth::user();
+        if (Auth::user()->cannot(Permissions::SETTINGS_MANAGE)) {
+            return response()->json(['success' => false, 'message' => 'Non autorisé'], 403);
+        }
 
         $validator = Validator::make($request->all(), [
             'width' => 'nullable|in:58mm,80mm',
@@ -72,10 +78,11 @@ class ReceiptSettingController extends Controller
         }
 
         // Requête fraîche — voir le commentaire équivalent dans index().
-        $existing = ReceiptSetting::where('user_id', $user->id)->first();
+        $accountId = CurrentAccount::id();
+        $existing = ReceiptSetting::where('user_id', $accountId)->first();
         $booleanFields = ['show_logo', 'show_address', 'show_phone', 'show_tax_id', 'show_qr', 'show_waelly_mention', 'auto_print'];
 
-        $payload = ['user_id' => $user->id];
+        $payload = ['user_id' => $accountId];
         foreach (self::DEFAULTS as $field => $default) {
             if ($request->has($field)) {
                 $payload[$field] = in_array($field, $booleanFields, true) ? $request->boolean($field) : $request->input($field);
@@ -84,7 +91,7 @@ class ReceiptSettingController extends Controller
             }
         }
 
-        $settings = ReceiptSetting::updateOrCreate(['user_id' => $user->id], $payload);
+        $settings = ReceiptSetting::updateOrCreate(['user_id' => $accountId], $payload);
 
         return response()->json([
             'success' => true,

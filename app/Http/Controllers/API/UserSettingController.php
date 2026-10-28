@@ -4,6 +4,8 @@ namespace App\Http\Controllers\API;
 
 use App\Http\Controllers\Controller;
 use App\Models\UserSetting;
+use App\Support\CurrentAccount;
+use App\Support\Permissions;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
@@ -16,22 +18,17 @@ class UserSettingController extends Controller
      */
     public function index(): JsonResponse
     {
+        if (Auth::user()->cannot(Permissions::SETTINGS_MANAGE)) {
+            return response()->json(['success' => false, 'message' => 'Non autorisé'], 403);
+        }
+
         try {
-            $user = Auth::user();
-
-            if (!$user) {
-                return response()->json([
-                    'success' => false,
-                    'message' => 'Utilisateur non authentifié'
-                ], 401);
-            }
-
-            $settings = $user->settings;
+            $settings = UserSetting::where('user_id', CurrentAccount::id())->first();
 
             // Si pas de paramètres, créer avec les valeurs par défaut
             if (!$settings) {
                 $settings = UserSetting::create([
-                    'user_id' => $user->id,
+                    'user_id' => CurrentAccount::id(),
                     'currency' => 'FCFA',
                     'low_stock_threshold' => 80,
                     'language' => 'fr',
@@ -61,15 +58,13 @@ class UserSettingController extends Controller
      */
     public function update(Request $request): JsonResponse
     {
-        try {
-            $user = Auth::user();
+        if (Auth::user()->cannot(Permissions::SETTINGS_MANAGE)) {
+            return response()->json(['success' => false, 'message' => 'Non autorisé'], 403);
+        }
 
-            if (!$user) {
-                return response()->json([
-                    'success' => false,
-                    'message' => 'Utilisateur non authentifié'
-                ], 401);
-            }
+        try {
+            $accountId = CurrentAccount::id();
+            $existing = UserSetting::where('user_id', $accountId)->first();
 
             // Validation
             $validator = Validator::make($request->all(), [
@@ -98,15 +93,15 @@ class UserSettingController extends Controller
 
             // Créer ou mettre à jour les paramètres
             $settings = UserSetting::updateOrCreate(
-                ['user_id' => $user->id],
+                ['user_id' => $accountId],
                 [
-                    'currency' => $request->currency ?? $user->settings?->currency ?? 'FCFA',
-                    'low_stock_threshold' => $request->low_stock_threshold ?? $user->settings?->low_stock_threshold ?? 80,
-                    'language' => $request->language ?? $user->settings?->language ?? 'fr',
-                    'notify_stock_low' => $request->has('notify_stock_low') ? $request->boolean('notify_stock_low') : ($user->settings?->notify_stock_low ?? true),
-                    'notify_invoice_paid' => $request->has('notify_invoice_paid') ? $request->boolean('notify_invoice_paid') : ($user->settings?->notify_invoice_paid ?? true),
-                    'notify_invoice_overdue' => $request->has('notify_invoice_overdue') ? $request->boolean('notify_invoice_overdue') : ($user->settings?->notify_invoice_overdue ?? true),
-                    'notify_team_joined' => $request->has('notify_team_joined') ? $request->boolean('notify_team_joined') : ($user->settings?->notify_team_joined ?? true),
+                    'currency' => $request->currency ?? $existing?->currency ?? 'FCFA',
+                    'low_stock_threshold' => $request->low_stock_threshold ?? $existing?->low_stock_threshold ?? 80,
+                    'language' => $request->language ?? $existing?->language ?? 'fr',
+                    'notify_stock_low' => $request->has('notify_stock_low') ? $request->boolean('notify_stock_low') : ($existing?->notify_stock_low ?? true),
+                    'notify_invoice_paid' => $request->has('notify_invoice_paid') ? $request->boolean('notify_invoice_paid') : ($existing?->notify_invoice_paid ?? true),
+                    'notify_invoice_overdue' => $request->has('notify_invoice_overdue') ? $request->boolean('notify_invoice_overdue') : ($existing?->notify_invoice_overdue ?? true),
+                    'notify_team_joined' => $request->has('notify_team_joined') ? $request->boolean('notify_team_joined') : ($existing?->notify_team_joined ?? true),
                 ]
             );
 

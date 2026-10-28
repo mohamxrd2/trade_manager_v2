@@ -2,6 +2,8 @@
 
 namespace App\Http\Controllers\API;
 
+use App\Support\CurrentAccount;
+use App\Support\Permissions;
 use App\Exceptions\BasketStockException;
 use App\Exceptions\BasketValidationException;
 use App\Exceptions\InsufficientStockException;
@@ -130,8 +132,12 @@ class InvoiceController extends Controller
      */
     public function dashboard(): JsonResponse
     {
+        if (Auth::user()->cannot(Permissions::INVOICES_VIEW)) {
+            return response()->json(['success' => false, 'message' => 'Non autorisé'], 403);
+        }
+
         try {
-            $userId = Auth::id();
+            $userId = CurrentAccount::id();
 
             // Factures non payées
             $unpaidInvoices = Invoice::where('user_id', $userId)
@@ -183,7 +189,7 @@ class InvoiceController extends Controller
             ]);
         } catch (\Exception $e) {
             Log::error('Invoice dashboard failed', [
-                'user_id' => Auth::id(),
+                'user_id' => CurrentAccount::id(),
                 'error' => $e->getMessage(),
             ]);
 
@@ -203,8 +209,12 @@ class InvoiceController extends Controller
      */
     public function index(Request $request): JsonResponse
     {
+        if (Auth::user()->cannot(Permissions::INVOICES_VIEW)) {
+            return response()->json(['success' => false, 'message' => 'Non autorisé'], 403);
+        }
+
         try {
-            $query = Invoice::where('user_id', Auth::id())
+            $query = Invoice::where('user_id', CurrentAccount::id())
                 ->with(['client:id,name,email', 'items']);
 
             // Filtre par statut
@@ -257,7 +267,7 @@ class InvoiceController extends Controller
             ]);
         } catch (\Exception $e) {
             Log::error('Invoice list failed', [
-                'user_id' => Auth::id(),
+                'user_id' => CurrentAccount::id(),
                 'error' => $e->getMessage(),
             ]);
 
@@ -276,13 +286,17 @@ class InvoiceController extends Controller
      */
     public function store(Request $request): JsonResponse
     {
+        if (Auth::user()->cannot(Permissions::INVOICES_MANAGE)) {
+            return response()->json(['success' => false, 'message' => 'Non autorisé'], 403);
+        }
+
         // =====================================================================
         // ÉTAPE 1: VALIDATION STRICTE
         // =====================================================================
         $validator = Validator::make($request->all(), [
-            'client_id' => ['required', 'uuid', 'exists:clients,id'],
+            'client_id' => ['required', 'uuid', 'exists:clients,id,user_id,' . CurrentAccount::id()],
             'items' => ['required', 'array', 'min:1'],
-            'items.*.article_id' => ['required', 'uuid', 'exists:articles,id'],
+            'items.*.article_id' => ['required', 'uuid', 'exists:articles,id,user_id,' . CurrentAccount::id()],
             'items.*.variation_id' => ['nullable', 'uuid', 'exists:variations,id'],
             'items.*.quantity' => ['required', 'integer', 'min:1'],
             'items.*.unit_price' => ['nullable', 'numeric', 'min:0'],
@@ -319,7 +333,7 @@ class InvoiceController extends Controller
 
         if ($validator->fails()) {
             Log::warning('Invoice validation failed', [
-                'user_id' => Auth::id(),
+                'user_id' => CurrentAccount::id(),
                 'errors' => $validator->errors()->toArray(),
                 'payload' => $request->except(['items']), // Ne pas logger tous les items
             ]);
@@ -334,12 +348,17 @@ class InvoiceController extends Controller
         // =====================================================================
         // ÉTAPE 2: VÉRIFICATIONS PRÉLIMINAIRES
         // =====================================================================
+        // $user reste l'ACTEUR (journal d'activité, logs) ; toutes les
+        // vérifications/rattachements ci-dessous utilisent CurrentAccount::id()
+        // — l'entreprise/les clients/factures appartiennent au COMPTE, un
+        // membre n'a ni entreprise ni client "à lui" (voir contexte du
+        // chantier "Équipe").
         $user = Auth::user();
-        $company = $user->company;
+        $company = \App\Models\Company::where('user_id', CurrentAccount::id())->first();
 
         // Vérifier que l'utilisateur a une entreprise
         if (!$company) {
-            Log::error('Invoice creation failed: No company', ['user_id' => $user->id]);
+            Log::error('Invoice creation failed: No company', ['user_id' => CurrentAccount::id()]);
             return response()->json([
                 'success' => false,
                 'code' => 'COMPANY_NOT_FOUND',
@@ -351,7 +370,7 @@ class InvoiceController extends Controller
         if (!$company->is_invoice_ready) {
             $missing = $company->getMissingInvoiceFields();
             Log::warning('Invoice creation blocked: Company incomplete', [
-                'user_id' => $user->id,
+                'user_id' => CurrentAccount::id(),
                 'company_id' => $company->id,
                 'missing' => $missing,
             ]);
@@ -363,14 +382,14 @@ class InvoiceController extends Controller
             ], 403);
         }
 
-        // Vérifier que le client appartient à l'utilisateur
+        // Vérifier que le client appartient au COMPTE
         $client = Client::where('id', $request->client_id)
-            ->where('user_id', $user->id)
+            ->where('user_id', CurrentAccount::id())
             ->first();
 
         if (!$client) {
             Log::warning('Invoice creation failed: Client not found or unauthorized', [
-                'user_id' => $user->id,
+                'user_id' => CurrentAccount::id(),
                 'client_id' => $request->client_id,
             ]);
             return response()->json([
@@ -461,12 +480,14 @@ class InvoiceController extends Controller
         for ($attempt = 1; $attempt <= self::INVOICE_NUMBER_MAX_ATTEMPTS; $attempt++) {
             try {
                 $invoice = DB::transaction(function () use ($request, $user, $company, $client) {
-                    // Générer le numéro de facture
-                    $invoiceNumber = Invoice::generateInvoiceNumber($user->id);
+                    // Générer le numéro de facture — séquence PAR COMPTE (partagée
+                    // par tous ses membres), pas par utilisateur réellement connecté.
+                    $invoiceNumber = Invoice::generateInvoiceNumber(CurrentAccount::id());
 
                     // Créer la facture avec valeurs par défaut explicites
                     $invoice = Invoice::create([
-                        'user_id' => $user->id,
+                        'user_id' => CurrentAccount::id(),
+                        'created_by_user_id' => CurrentAccount::actorId(),
                         'company_id' => $company->id,
                         'client_id' => $client->id,
                         'invoice_number' => $invoiceNumber,
@@ -609,6 +630,10 @@ class InvoiceController extends Controller
      */
     public function show(string $id): JsonResponse
     {
+        if (Auth::user()->cannot(Permissions::INVOICES_VIEW)) {
+            return response()->json(['success' => false, 'message' => 'Non autorisé'], 403);
+        }
+
         try {
             // Valider le format UUID
             if (!preg_match('/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i', $id)) {
@@ -619,7 +644,7 @@ class InvoiceController extends Controller
             }
 
             $invoice = Invoice::where('id', $id)
-                ->where('user_id', Auth::id())
+                ->where('user_id', CurrentAccount::id())
                 ->with([
                     'client',
                     'company',
@@ -637,7 +662,7 @@ class InvoiceController extends Controller
             }
 
             Log::info('Invoice retrieved', [
-                'user_id' => Auth::id(),
+                'user_id' => CurrentAccount::id(),
                 'invoice_id' => $invoice->id,
                 'invoice_number' => $invoice->invoice_number,
             ]);
@@ -649,7 +674,7 @@ class InvoiceController extends Controller
             ]);
         } catch (\Exception $e) {
             Log::error('Invoice show failed', [
-                'user_id' => Auth::id(),
+                'user_id' => CurrentAccount::id(),
                 'invoice_id' => $id,
                 'error' => $e->getMessage(),
                 'trace' => $e->getTraceAsString(),
@@ -670,6 +695,10 @@ class InvoiceController extends Controller
      */
     public function preview(string $id): Response|JsonResponse
     {
+        if (Auth::user()->cannot(Permissions::INVOICES_VIEW)) {
+            abort(403, 'Non autorisé');
+        }
+
         try {
             $invoice = $this->findInvoiceForPdf($id);
 
@@ -684,7 +713,7 @@ class InvoiceController extends Controller
                 ->stream("facture-{$invoice->invoice_number}.pdf");
         } catch (\Throwable $e) {
             Log::error('Invoice PDF preview failed', [
-                'user_id' => Auth::id(),
+                'user_id' => CurrentAccount::id(),
                 'invoice_id' => $id,
                 'error' => $e->getMessage(),
             ]);
@@ -704,6 +733,10 @@ class InvoiceController extends Controller
      */
     public function download(string $id): Response|JsonResponse
     {
+        if (Auth::user()->cannot(Permissions::INVOICES_VIEW)) {
+            abort(403, 'Non autorisé');
+        }
+
         try {
             $invoice = $this->findInvoiceForPdf($id);
 
@@ -718,7 +751,7 @@ class InvoiceController extends Controller
                 ->download("facture-{$invoice->invoice_number}.pdf");
         } catch (\Throwable $e) {
             Log::error('Invoice PDF download failed', [
-                'user_id' => Auth::id(),
+                'user_id' => CurrentAccount::id(),
                 'invoice_id' => $id,
                 'error' => $e->getMessage(),
             ]);
@@ -742,6 +775,10 @@ class InvoiceController extends Controller
      */
     public function updateStatus(Request $request, string $id): JsonResponse
     {
+        if (Auth::user()->cannot(Permissions::INVOICES_MANAGE)) {
+            return response()->json(['success' => false, 'message' => 'Non autorisé'], 403);
+        }
+
         try {
             $validator = Validator::make($request->all(), [
                 'status' => 'required|in:draft,unpaid,paid,cancelled,overdue',
@@ -759,7 +796,7 @@ class InvoiceController extends Controller
             }
 
             $invoice = Invoice::where('id', $id)
-                ->where('user_id', Auth::id())
+                ->where('user_id', CurrentAccount::id())
                 ->first();
 
             if (!$invoice) {
@@ -818,7 +855,7 @@ class InvoiceController extends Controller
             ]);
         } catch (\Exception $e) {
             Log::error('Invoice status update failed', [
-                'user_id' => Auth::id(),
+                'user_id' => CurrentAccount::id(),
                 'invoice_id' => $id,
                 'error' => $e->getMessage(),
             ]);
@@ -844,6 +881,10 @@ class InvoiceController extends Controller
      */
     public function destroy(string $id): JsonResponse
     {
+        if (Auth::user()->cannot(Permissions::INVOICES_MANAGE)) {
+            return response()->json(['success' => false, 'message' => 'Non autorisé'], 403);
+        }
+
         try {
             // Valider le format UUID
             if (!preg_match('/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i', $id)) {
@@ -854,7 +895,7 @@ class InvoiceController extends Controller
             }
 
             $invoice = Invoice::where('id', $id)
-                ->where('user_id', Auth::id())
+                ->where('user_id', CurrentAccount::id())
                 ->first();
 
             if (!$invoice) {
@@ -892,7 +933,7 @@ class InvoiceController extends Controller
             });
 
             Log::info('Invoice deleted', [
-                'user_id' => Auth::id(),
+                'user_id' => CurrentAccount::id(),
                 'invoice_id' => $id,
                 'invoice_number' => $invoiceNumber,
                 'previous_status' => $invoiceStatus,
@@ -908,7 +949,7 @@ class InvoiceController extends Controller
             ]);
         } catch (\Exception $e) {
             Log::error('Invoice deletion failed', [
-                'user_id' => Auth::id(),
+                'user_id' => CurrentAccount::id(),
                 'invoice_id' => $id,
                 'error' => $e->getMessage(),
             ]);
@@ -967,9 +1008,13 @@ class InvoiceController extends Controller
      */
     public function duplicate(string $id): JsonResponse
     {
+        if (Auth::user()->cannot(Permissions::INVOICES_MANAGE)) {
+            return response()->json(['success' => false, 'message' => 'Non autorisé'], 403);
+        }
+
         try {
             $original = Invoice::where('id', $id)
-                ->where('user_id', Auth::id())
+                ->where('user_id', CurrentAccount::id())
                 ->with('items')
                 ->first();
 
@@ -985,10 +1030,11 @@ class InvoiceController extends Controller
             $newInvoice = DB::transaction(function () use ($original, $user) {
                 // Créer la nouvelle facture
                 $newInvoice = Invoice::create([
-                    'user_id' => $user->id,
+                    'user_id' => CurrentAccount::id(),
+                    'created_by_user_id' => CurrentAccount::actorId(),
                     'company_id' => $original->company_id,
                     'client_id' => $original->client_id,
-                    'invoice_number' => Invoice::generateInvoiceNumber($user->id),
+                    'invoice_number' => Invoice::generateInvoiceNumber(CurrentAccount::id()),
                     'status' => 'draft',
                     'subtotal' => $original->subtotal,
                     'discount_amount' => $original->discount_amount,
@@ -1034,7 +1080,7 @@ class InvoiceController extends Controller
             ], 201);
         } catch (\Exception $e) {
             Log::error('Invoice duplication failed', [
-                'user_id' => Auth::id(),
+                'user_id' => CurrentAccount::id(),
                 'invoice_id' => $id,
                 'error' => $e->getMessage(),
             ]);
@@ -1058,7 +1104,7 @@ class InvoiceController extends Controller
         }
 
         return Invoice::where('id', $id)
-            ->where('user_id', Auth::id())
+            ->where('user_id', CurrentAccount::id())
             ->with(['client', 'company', 'items', 'user.settings'])
             ->first();
     }
@@ -1150,6 +1196,7 @@ class InvoiceController extends Controller
         try {
             OperationService::create([
                 'user_id' => $invoice->user_id,
+                'created_by_user_id' => CurrentAccount::actorId(),
                 'type' => 'sale',
                 'invoice_id' => $invoice->id,
                 'client_id' => $invoice->client_id,

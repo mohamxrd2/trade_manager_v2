@@ -11,6 +11,8 @@ use App\Models\Variation;
 use App\Services\NotificationService;
 use App\Services\OperationService;
 use App\Services\TransactionSearchParser;
+use App\Support\CurrentAccount;
+use App\Support\Permissions;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
@@ -52,7 +54,7 @@ class TransactionController extends Controller
      */
     private function findTransactionByIdempotencyKey(string $idempotencyKey): ?Transaction
     {
-        return Transaction::where('user_id', Auth::id())
+        return Transaction::where('user_id', CurrentAccount::id())
             ->where('idempotency_key', $idempotencyKey)
             ->first();
     }
@@ -161,6 +163,12 @@ class TransactionController extends Controller
             ], 422);
         }
 
+        $canViewAll = Auth::user()->can(Permissions::SALES_VIEW_ALL);
+        $canViewOwn = Auth::user()->can(Permissions::SALES_VIEW_OWN);
+        if (!$canViewAll && !$canViewOwn) {
+            return response()->json(['success' => false, 'message' => 'Non autorisé'], 403);
+        }
+
         try {
             $withSoldQuantity = function ($query) {
                 $query->withSum(['transactions' => function ($q) {
@@ -168,7 +176,15 @@ class TransactionController extends Controller
                 }], 'quantity');
             };
 
-            $query = Transaction::where('user_id', Auth::id())
+            $query = Transaction::where('user_id', CurrentAccount::id())
+                ->when(!$canViewAll, function ($q) {
+                    // sales.view_own (sans sales.view_all) : uniquement les
+                    // transactions dont l'opération a été créée par CE
+                    // membre — jamais celles d'un autre membre du compte.
+                    $q->whereHas('operation', function ($opQuery) {
+                        $opQuery->where('created_by_user_id', CurrentAccount::actorId());
+                    });
+                })
                 ->with([
                     // Précharge la relation utilisée par Article::getLowStockAttribute()
                     // (appended, donc calculée pour CHAQUE article à la sérialisation) :
@@ -430,7 +446,7 @@ class TransactionController extends Controller
     {
         try {
             $transaction = Transaction::where('id', $id)
-                ->where('user_id', Auth::id())
+                ->where('user_id', CurrentAccount::id())
                 ->with(['article' => function ($query) {
                     $query->withSum(['transactions' => function ($q) {
                         $q->where('type', 'sale');
@@ -464,6 +480,16 @@ class TransactionController extends Controller
      */
     public function store(Request $request): JsonResponse
     {
+        $requiredPermission = match ($request->input('type')) {
+            'sale' => Permissions::SALES_CREATE,
+            'expense' => Permissions::EXPENSES_CREATE,
+            'apport', 'retrait' => Permissions::DEPOSITS_MANAGE,
+            default => null,
+        };
+        if ($requiredPermission && Auth::user()->cannot($requiredPermission)) {
+            return response()->json(['success' => false, 'message' => 'Non autorisé'], 403);
+        }
+
         try {
             $validator = Validator::make($request->all(), [
                 'type' => 'required|in:sale,expense,apport,retrait',
@@ -478,7 +504,7 @@ class TransactionController extends Controller
                 // garantit qu'un collaborator_id d'un AUTRE compte échoue en
                 // 422 (pas seulement "collaborateur introuvable").
                 'funding_source' => 'required_if:type,apport|nullable|in:apport_personnel,collaborateur,pret,autre',
-                'collaborator_id' => 'required_if:funding_source,collaborateur|nullable|string|exists:collaborators,id,user_id,' . Auth::id(),
+                'collaborator_id' => 'required_if:funding_source,collaborateur|nullable|string|exists:collaborators,id,user_id,' . CurrentAccount::id(),
                 'payment_method' => 'required_if:type,apport|required_if:type,retrait|nullable|in:especes,orange_money,moov_money,wave,mtn_money,virement',
                 'note' => 'nullable|string|max:2000',
                 'date' => 'nullable|date',
@@ -538,7 +564,7 @@ class TransactionController extends Controller
 
                 if ($existing) {
                     Log::info('Idempotency-Key déjà traitée : transaction existante renvoyée sans réexécuter les effets métier (stock, notifications)', [
-                        'user_id' => Auth::id(),
+                        'user_id' => CurrentAccount::id(),
                         'idempotency_key' => $idempotencyKey,
                         'existing_transaction_id' => $existing->id,
                     ]);
@@ -563,7 +589,7 @@ class TransactionController extends Controller
                     // c'est le verrouillage et la vérification de stock,
                     // entièrement délégués au service ci-dessous.
                     $article = Article::where('id', $request->article_id)
-                        ->where('user_id', Auth::id())
+                        ->where('user_id', CurrentAccount::id())
                         ->first();
 
                     if (!$article) {
@@ -597,7 +623,7 @@ class TransactionController extends Controller
                         : "Vente de {$request->quantity} " . $article->name;
 
                     $operation = OperationService::create([
-                        'user_id' => Auth::id(),
+                        'user_id' => CurrentAccount::id(),
                         'type' => 'sale',
                         'idempotency_key' => $idempotencyKey,
                         'lines' => [[
@@ -620,7 +646,7 @@ class TransactionController extends Controller
 
                 } elseif ($request->type === 'expense') {
                     $operation = OperationService::create([
-                        'user_id' => Auth::id(),
+                        'user_id' => CurrentAccount::id(),
                         'type' => 'expense',
                         'idempotency_key' => $idempotencyKey,
                         'lines' => [[
@@ -643,7 +669,7 @@ class TransactionController extends Controller
                     $isDeposit = $request->type === 'apport';
 
                     $operation = OperationService::create([
-                        'user_id' => Auth::id(),
+                        'user_id' => CurrentAccount::id(),
                         'type' => $request->type,
                         'idempotency_key' => $idempotencyKey,
                         'payment_method' => $request->payment_method,
@@ -737,7 +763,7 @@ class TransactionController extends Controller
                 }
 
                 Log::warning('Conflit d\'idempotence détecté à l\'écriture (requêtes concurrentes) : transaction existante renvoyée sans réexécuter les effets métier', [
-                    'user_id' => Auth::id(),
+                    'user_id' => CurrentAccount::id(),
                     'idempotency_key' => $idempotencyKey,
                     'existing_transaction_id' => $existing->id,
                 ]);
@@ -775,7 +801,7 @@ class TransactionController extends Controller
     {
         try {
             $transaction = Transaction::where('id', $id)
-                ->where('user_id', Auth::id())
+                ->where('user_id', CurrentAccount::id())
                 ->first();
 
             if (!$transaction) {
@@ -1103,7 +1129,7 @@ class TransactionController extends Controller
     public function deleteAll(): JsonResponse
     {
         try {
-            $userId = Auth::id();
+            $userId = CurrentAccount::id();
 
             // Compter les transactions avant suppression
             $count = Transaction::where('user_id', $userId)->count();

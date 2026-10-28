@@ -8,6 +8,8 @@ use App\Http\Controllers\Controller;
 use App\Models\Operation;
 use App\Services\OperationService;
 use App\Services\TransactionSearchParser;
+use App\Support\CurrentAccount;
+use App\Support\Permissions;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
@@ -37,7 +39,7 @@ class OperationController extends Controller
 
     private function findByIdempotencyKey(string $idempotencyKey): ?Operation
     {
-        return Operation::where('user_id', Auth::id())
+        return Operation::where('user_id', CurrentAccount::id())
             ->where('idempotency_key', $idempotencyKey)
             ->first();
     }
@@ -89,6 +91,22 @@ class OperationController extends Controller
         try {
             $type = $request->input('type');
 
+            // Une permission par type d'opération — jamais de création
+            // "générique" : un caissier sans expenses.create ne peut pas
+            // enregistrer une dépense même s'il sait créer une vente.
+            $requiredPermission = match ($type) {
+                'sale' => Permissions::SALES_CREATE,
+                'expense' => Permissions::EXPENSES_CREATE,
+                'apport', 'retrait' => Permissions::DEPOSITS_MANAGE,
+                default => null,
+            };
+            if ($requiredPermission && Auth::user()->cannot($requiredPermission)) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Non autorisé',
+                ], 403);
+            }
+
             $validator = Validator::make($request->all(), [
                 'type' => 'required|in:sale,expense,apport,retrait',
                 'payment_method' => [
@@ -96,7 +114,7 @@ class OperationController extends Controller
                     'in:' . implode(',', self::PAYMENT_METHODS),
                 ],
                 'occurred_at' => 'nullable|date',
-                'client_id' => 'nullable|string|exists:clients,id,user_id,' . Auth::id(),
+                'client_id' => 'nullable|string|exists:clients,id,user_id,' . CurrentAccount::id(),
                 'note' => 'nullable|string|max:2000',
                 'amount_received' => 'nullable|numeric|min:0',
                 'lines' => 'required|array|min:1|max:100',
@@ -107,7 +125,7 @@ class OperationController extends Controller
                 'lines.*.amount' => $type === 'sale' ? 'prohibited' : 'required|numeric|gt:0',
                 'lines.*.name' => $type === 'expense' ? 'required|string|max:255' : 'nullable|string|max:255',
                 'lines.*.funding_source' => $type === 'apport' ? 'required|in:apport_personnel,collaborateur,pret,autre' : 'prohibited',
-                'lines.*.collaborator_id' => 'nullable|string|exists:collaborators,id,user_id,' . Auth::id(),
+                'lines.*.collaborator_id' => 'nullable|string|exists:collaborators,id,user_id,' . CurrentAccount::id(),
                 'lines.*.note' => 'nullable|string|max:2000',
             ]);
 
@@ -174,7 +192,8 @@ class OperationController extends Controller
             try {
                 $operation = DB::transaction(function () use ($request, $type, $lines, $idempotencyKey) {
                     return OperationService::create([
-                        'user_id' => Auth::id(),
+                        'user_id' => CurrentAccount::id(),
+                        'created_by_user_id' => CurrentAccount::actorId(),
                         'type' => $type,
                         'payment_method' => $request->input('payment_method'),
                         'occurred_at' => $request->input('occurred_at'),
@@ -237,13 +256,20 @@ class OperationController extends Controller
 
     public function show(string $id): JsonResponse
     {
-        $operation = Operation::where('id', $id)->where('user_id', Auth::id())->first();
+        $operation = Operation::where('id', $id)->where('user_id', CurrentAccount::id())->first();
 
         if (!$operation) {
             return response()->json([
                 'success' => false,
                 'message' => 'Opération non trouvée',
             ], 404);
+        }
+
+        if (Auth::user()->cannot('view', $operation)) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Non autorisé à consulter cette opération',
+            ], 403);
         }
 
         return response()->json([
@@ -275,8 +301,23 @@ class OperationController extends Controller
             ], 422);
         }
 
+        $canViewAll = Auth::user()->can(Permissions::SALES_VIEW_ALL);
+        $canViewOwn = Auth::user()->can(Permissions::SALES_VIEW_OWN);
+
+        if (!$canViewAll && !$canViewOwn) {
+            return response()->json(['success' => false, 'message' => 'Non autorisé'], 403);
+        }
+
         try {
-            $query = Operation::where('user_id', Auth::id());
+            $query = Operation::where('user_id', CurrentAccount::id());
+
+            // sales.view_own (sans sales.view_all) : un membre ne voit que
+            // les opérations qu'IL a créées — jamais celles des autres
+            // membres du même compte (ex. caissier A ne voit pas les
+            // ventes du caissier B).
+            if (!$canViewAll) {
+                $query->where('created_by_user_id', CurrentAccount::actorId());
+            }
 
             if ($request->filled('type')) {
                 $query->where('type', $request->input('type'));

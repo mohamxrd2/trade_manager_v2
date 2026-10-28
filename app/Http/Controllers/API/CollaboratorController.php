@@ -6,6 +6,8 @@ use App\Http\Controllers\Controller;
 use App\Models\Collaborator;
 use App\Models\User;
 use App\Services\NotificationService;
+use App\Support\CurrentAccount;
+use App\Support\Permissions;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
@@ -20,8 +22,12 @@ class CollaboratorController extends Controller
      */
     public function index(): JsonResponse
     {
+        if (Auth::user()->cannot(Permissions::PARTNERS_VIEW)) {
+            return response()->json(['success' => false, 'message' => 'Non autorisé'], 403);
+        }
+
         try {
-            $collaborators = Collaborator::where('user_id', Auth::id())
+            $collaborators = Collaborator::where('user_id', CurrentAccount::id())
                 ->orderBy('created_at', 'desc')
                 ->get()
                 ->map(function ($collaborator) {
@@ -48,6 +54,13 @@ class CollaboratorController extends Controller
      */
     public function store(Request $request): JsonResponse
     {
+        // Gestion des parts des associés : réservée au propriétaire, quel
+        // que soit le rôle du membre (pas de permission "partners.manage" —
+        // voir la note en tête de App\Support\Permissions).
+        if (!Auth::user()->isOwner()) {
+            return response()->json(['success' => false, 'message' => 'Non autorisé'], 403);
+        }
+
         try {
             $validator = Validator::make($request->all(), [
                 'name' => 'required|string|max:255',
@@ -67,7 +80,7 @@ class CollaboratorController extends Controller
             // Désactiver la transaction pour éviter les problèmes avec PostgreSQL
             // return DB::transaction(function () use ($request) {
                 // Verrouiller la ligne utilisateur pour éviter les races conditions
-                $user = User::where('id', Auth::id())->lockForUpdate()->first();
+                $user = User::where('id', CurrentAccount::id())->lockForUpdate()->first();
 
                 if (!$user) {
                     return response()->json([
@@ -136,9 +149,13 @@ class CollaboratorController extends Controller
      */
     public function show(string $id): JsonResponse
     {
+        if (Auth::user()->cannot(Permissions::PARTNERS_VIEW)) {
+            return response()->json(['success' => false, 'message' => 'Non autorisé'], 403);
+        }
+
         try {
             $collaborator = Collaborator::where('id', $id)
-                ->where('user_id', Auth::id())
+                ->where('user_id', CurrentAccount::id())
                 ->with('user')
                 ->first();
 
@@ -171,6 +188,10 @@ class CollaboratorController extends Controller
      */
     public function update(Request $request, string $id): JsonResponse
     {
+        if (!Auth::user()->isOwner()) {
+            return response()->json(['success' => false, 'message' => 'Non autorisé'], 403);
+        }
+
         try {
             if ($request->has('wallet')) {
                 return response()->json([
@@ -197,7 +218,7 @@ class CollaboratorController extends Controller
 
             return DB::transaction(function () use ($request, $id) {
                 $collaborator = Collaborator::where('id', $id)
-                    ->where('user_id', Auth::id())
+                    ->where('user_id', CurrentAccount::id())
                     ->first();
 
                 if (!$collaborator) {
@@ -210,7 +231,7 @@ class CollaboratorController extends Controller
                 if ($request->has('part')) {
                     // Verrouiller la ligne utilisateur (ajustement de
                     // company_share) — même précaution que store()/destroy().
-                    $user = User::where('id', Auth::id())->lockForUpdate()->first();
+                    $user = User::where('id', CurrentAccount::id())->lockForUpdate()->first();
 
                     if (!$user) {
                         return response()->json([
@@ -223,7 +244,7 @@ class CollaboratorController extends Controller
                     // collaborateurs (celui qu'on modifie est exclu de la
                     // somme, sa nouvelle valeur est ajoutée ensuite) — jamais
                     // sur company_share, qui peut être décalé.
-                    $sumOtherParts = (string) Collaborator::where('user_id', Auth::id())
+                    $sumOtherParts = (string) Collaborator::where('user_id', CurrentAccount::id())
                         ->where('id', '!=', $id)
                         ->sum('part');
                     $projectedTotal = bcadd($sumOtherParts, (string) $request->part, 2);
@@ -276,11 +297,15 @@ class CollaboratorController extends Controller
      */
     public function destroy(string $id): JsonResponse
     {
+        if (!Auth::user()->isOwner()) {
+            return response()->json(['success' => false, 'message' => 'Non autorisé'], 403);
+        }
+
         try {
             return DB::transaction(function () use ($id) {
                 // Récupérer le collaborateur
                 $collaborator = Collaborator::where('id', $id)
-                    ->where('user_id', Auth::id())
+                    ->where('user_id', CurrentAccount::id())
                     ->first();
 
                 if (!$collaborator) {
@@ -291,7 +316,7 @@ class CollaboratorController extends Controller
                 }
 
                 // Verrouiller la ligne utilisateur
-                $user = User::where('id', Auth::id())->lockForUpdate()->first();
+                $user = User::where('id', CurrentAccount::id())->lockForUpdate()->first();
 
                 if (!$user) {
                     return response()->json([

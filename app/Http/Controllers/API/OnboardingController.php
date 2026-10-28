@@ -3,6 +3,9 @@
 namespace App\Http\Controllers\API;
 
 use App\Http\Controllers\Controller;
+use App\Models\Company;
+use App\Models\UserSetting;
+use App\Support\CurrentAccount;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\Auth;
 
@@ -20,6 +23,13 @@ class OnboardingController extends Controller
     public function complete(): JsonResponse
     {
         $user = Auth::user();
+
+        // L'onboarding n'existe que pour le propriétaire du compte — un
+        // membre utilise l'entreprise/les paramètres déjà en place (voir
+        // User::isMember()), il n'a jamais de parcours d'onboarding à lui.
+        if ($user->isMember()) {
+            return response()->json(['success' => false, 'message' => 'Non autorisé'], 403);
+        }
 
         // onboarding_status n'est volontairement pas mass-assignable (même
         // logique que email_verified_at sur User) : seul ce point du code,
@@ -40,6 +50,11 @@ class OnboardingController extends Controller
     public function skip(): JsonResponse
     {
         $user = Auth::user();
+
+        if ($user->isMember()) {
+            return response()->json(['success' => false, 'message' => 'Non autorisé'], 403);
+        }
+
         $user->forceFill(['onboarding_status' => 'skipped'])->save();
 
         return response()->json([
@@ -63,10 +78,17 @@ class OnboardingController extends Controller
                 ], 401);
             }
 
-            $user->load(['company', 'settings']);
+            // L'onboarding n'existe que pour le propriétaire du compte — un
+            // membre utilise l'entreprise/les paramètres déjà en place.
+            if ($user->isMember()) {
+                return response()->json(['success' => false, 'message' => 'Non autorisé'], 403);
+            }
 
-            $hasCompany = $user->company !== null;
-            $hasSettings = $user->settings !== null;
+            $company = Company::where('user_id', CurrentAccount::id())->first();
+            $settings = UserSetting::where('user_id', CurrentAccount::id())->first();
+
+            $hasCompany = $company !== null;
+            $hasSettings = $settings !== null;
             $status = $user->onboarding_status;
             $isComplete = $status === 'done';
 
@@ -83,8 +105,8 @@ class OnboardingController extends Controller
                     'next_step' => $nextStep,
                     'has_company' => $hasCompany,
                     'has_settings' => $hasSettings,
-                    'company' => $user->company,
-                    'settings' => $user->settings,
+                    'company' => $company,
+                    'settings' => $settings,
                 ]
             ], 200);
 

@@ -5,7 +5,10 @@ namespace App\Http\Controllers\API;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\API\RegisterRequest;
 use App\Mail\RegistrationVerificationCode;
+use App\Models\Company;
 use App\Models\User;
+use App\Models\UserSetting;
+use App\Support\CurrentAccount;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
@@ -354,8 +357,13 @@ class AuthController extends Controller
             return response()->json(['message' => 'Non authentifié'], 401);
         }
 
-        // Charger les relations nécessaires
-        $user->load(['company', 'settings']);
+        // Charger l'entreprise/les paramètres DU COMPTE — un membre n'a pas
+        // sa propre entreprise ni ses propres paramètres, il utilise ceux du
+        // propriétaire (voir User::accountId()). Les champs financiers
+        // globaux (balance, total_sale, wallet, company_share...) restent à
+        // masquer conditionnellement pour les membres — voir tâche #193.
+        $user->setRelation('company', Company::where('user_id', CurrentAccount::id())->first());
+        $user->setRelation('settings', UserSetting::where('user_id', CurrentAccount::id())->first());
 
         // Retourner directement l'utilisateur (format simplifié)
         return response()->json($user);

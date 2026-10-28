@@ -6,6 +6,8 @@ use App\Http\Controllers\Controller;
 use App\Models\Article;
 use App\Models\Operation;
 use App\Models\Transaction;
+use App\Support\CurrentAccount;
+use App\Support\Permissions;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
@@ -23,6 +25,10 @@ class AnalyticsController extends Controller
      */
     public function summary(Request $request): JsonResponse
     {
+        if (Auth::user()->cannot(Permissions::ANALYTICS_VIEW)) {
+            return response()->json(['success' => false, 'message' => 'Non autorisé'], 403);
+        }
+
         $period = $request->input('period', '30d');
         $from = $request->input('from') ?? $request->input('start_date');
         $to = $request->input('to') ?? $request->input('end_date');
@@ -31,10 +37,10 @@ class AnalyticsController extends Controller
             // La canonicalisation (ex. '30' -> '30d') fait partie de la clé de
             // cache pour ne jamais mélanger deux alias de la même période.
             $canonical = \App\Services\AnalyticsPeriod::canonicalize($period);
-            $cacheKey = 'analytics_summary:' . Auth::id() . ':' . $canonical . ':' . ($from ?? '') . ':' . ($to ?? '');
+            $cacheKey = 'analytics_summary:' . CurrentAccount::id() . ':' . $canonical . ':' . ($from ?? '') . ':' . ($to ?? '');
 
             $data = \Illuminate\Support\Facades\Cache::remember($cacheKey, 60, function () use ($period, $from, $to) {
-                return (new \App\Services\AnalyticsSummaryService())->summary(Auth::id(), $period, $from, $to);
+                return (new \App\Services\AnalyticsSummaryService())->summary(CurrentAccount::id(), $period, $from, $to);
             });
 
             return response()->json([
@@ -60,6 +66,10 @@ class AnalyticsController extends Controller
      */
     public function overview(Request $request): JsonResponse
     {
+        if (Auth::user()->cannot(Permissions::ANALYTICS_VIEW)) {
+            return response()->json(['success' => false, 'message' => 'Non autorisé'], 403);
+        }
+
         try {
             $period = $request->input('period', '30'); // 'today', '7', '30', 'year', 'custom'
             $startDate = $request->input('start_date');
@@ -68,7 +78,7 @@ class AnalyticsController extends Controller
             // Calculer les dates selon la période
             [$start, $end] = $this->calculateDateRange($period, $startDate, $endDate);
 
-            $userId = Auth::id();
+            $userId = CurrentAccount::id();
 
             // Total des ventes
             $totalSales = Transaction::where('user_id', $userId)
@@ -111,6 +121,10 @@ class AnalyticsController extends Controller
      */
     public function trends(Request $request): JsonResponse
     {
+        if (Auth::user()->cannot(Permissions::ANALYTICS_VIEW)) {
+            return response()->json(['success' => false, 'message' => 'Non autorisé'], 403);
+        }
+
         try {
             $period = $request->input('period', '30');
             $type = $request->input('type', 'both'); // 'sales_expenses', 'wallet', 'both'
@@ -118,7 +132,7 @@ class AnalyticsController extends Controller
             $endDate = $request->input('end_date');
 
             [$start, $end] = $this->calculateDateRange($period, $startDate, $endDate);
-            $userId = Auth::id();
+            $userId = CurrentAccount::id();
 
             $data = [];
 
@@ -282,13 +296,17 @@ class AnalyticsController extends Controller
      */
     public function categoryAnalysis(Request $request): JsonResponse
     {
+        if (Auth::user()->cannot(Permissions::ANALYTICS_VIEW)) {
+            return response()->json(['success' => false, 'message' => 'Non autorisé'], 403);
+        }
+
         try {
             $period = $request->input('period', '30');
             $startDate = $request->input('start_date');
             $endDate = $request->input('end_date');
 
             [$start, $end] = $this->calculateDateRange($period, $startDate, $endDate);
-            $userId = Auth::id();
+            $userId = CurrentAccount::id();
 
             // Répartition des ventes par type d'article
             // Utiliser leftJoin pour gérer les cas où article_id est NULL
@@ -364,13 +382,17 @@ class AnalyticsController extends Controller
      */
     public function comparisons(Request $request): JsonResponse
     {
+        if (Auth::user()->cannot(Permissions::ANALYTICS_VIEW)) {
+            return response()->json(['success' => false, 'message' => 'Non autorisé'], 403);
+        }
+
         try {
             $period = $request->input('period', '30');
             $startDate = $request->input('start_date');
             $endDate = $request->input('end_date');
 
             [$currentStart, $currentEnd] = $this->calculateDateRange($period, $startDate, $endDate);
-            $userId = Auth::id();
+            $userId = CurrentAccount::id();
 
             // Calculer la période précédente selon le type de période
             if ($period === 'year') {
@@ -511,13 +533,17 @@ class AnalyticsController extends Controller
      */
     public function kpis(Request $request): JsonResponse
     {
+        if (Auth::user()->cannot(Permissions::ANALYTICS_VIEW)) {
+            return response()->json(['success' => false, 'message' => 'Non autorisé'], 403);
+        }
+
         try {
             $period = $request->input('period', '30');
             $startDate = $request->input('start_date');
             $endDate = $request->input('end_date');
 
             [$start, $end] = $this->calculateDateRange($period, $startDate, $endDate);
-            $userId = Auth::id();
+            $userId = CurrentAccount::id();
 
             $totalSales = Transaction::where('user_id', $userId)
                 ->where('type', 'sale')
@@ -596,6 +622,10 @@ class AnalyticsController extends Controller
      */
     public function transactions(Request $request): JsonResponse
     {
+        if (Auth::user()->cannot(Permissions::ANALYTICS_VIEW)) {
+            return response()->json(['success' => false, 'message' => 'Non autorisé'], 403);
+        }
+
         try {
             $period = $request->input('period', '30');
             $startDate = $request->input('start_date');
@@ -606,7 +636,7 @@ class AnalyticsController extends Controller
             $perPage = $request->input('per_page', 15);
 
             [$start, $end] = $this->calculateDateRange($period, $startDate, $endDate);
-            $userId = Auth::id();
+            $userId = CurrentAccount::id();
 
             $query = Transaction::where('user_id', $userId)
                 ->whereBetween('created_at', [$start, $end])
@@ -658,8 +688,12 @@ class AnalyticsController extends Controller
      */
     public function predictions(Request $request): JsonResponse
     {
+        if (Auth::user()->cannot(Permissions::ANALYTICS_VIEW)) {
+            return response()->json(['success' => false, 'message' => 'Non autorisé'], 403);
+        }
+
         try {
-            $userId = Auth::id();
+            $userId = CurrentAccount::id();
 
             // Récupérer tous les articles avec leurs transactions
             $articles = Article::where('user_id', $userId)

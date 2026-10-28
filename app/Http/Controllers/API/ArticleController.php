@@ -7,6 +7,8 @@ use App\Models\Article;
 use App\Models\StockReplenishment;
 use App\Models\Variation;
 use App\Services\ArticleStockService;
+use App\Support\CurrentAccount;
+use App\Support\Permissions;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
@@ -20,8 +22,12 @@ class ArticleController extends Controller
      */
     public function index(): JsonResponse
     {
+        if (Auth::user()->cannot(Permissions::STOCK_VIEW)) {
+            return response()->json(['success' => false, 'message' => 'Non autorisé'], 403);
+        }
+
         try {
-            $articles = Article::where('user_id', Auth::id())
+            $articles = Article::where('user_id', CurrentAccount::id())
                 ->withSum(['transactions' => function ($query) {
                     $query->where('type', 'sale');
                 }], 'quantity')
@@ -52,12 +58,16 @@ class ArticleController extends Controller
      */
     public function store(Request $request): JsonResponse
     {
+        if (Auth::user()->cannot(Permissions::STOCK_EDIT)) {
+            return response()->json(['success' => false, 'message' => 'Non autorisé'], 403);
+        }
+
         try {
             $type = $request->input('type');
             $hasVariationsPayload = $request->has('variations');
 
             $rules = [
-                'name' => 'required|string|max:255|unique:articles,name,NULL,id,user_id,' . Auth::id(),
+                'name' => 'required|string|max:255|unique:articles,name,NULL,id,user_id,' . CurrentAccount::id(),
                 'type' => 'required|in:simple,variable',
                 'image' => 'nullable|string|max:255',
             ];
@@ -127,7 +137,7 @@ class ArticleController extends Controller
 
             $article = DB::transaction(function () use ($request, $type, $hasVariationsPayload) {
                 $article = Article::create([
-                    'user_id' => Auth::id(),
+                    'user_id' => CurrentAccount::id(),
                     'name' => $request->name,
                     'type' => $type,
                     'image' => $request->image,
@@ -199,9 +209,13 @@ class ArticleController extends Controller
      */
     public function show(string $id): JsonResponse
     {
+        if (Auth::user()->cannot(Permissions::STOCK_VIEW)) {
+            return response()->json(['success' => false, 'message' => 'Non autorisé'], 403);
+        }
+
         try {
             $article = Article::where('id', $id)
-                ->where('user_id', Auth::id())
+                ->where('user_id', CurrentAccount::id())
                 ->withSum(['transactions' => function ($query) {
                     $query->where('type', 'sale');
                 }], 'quantity')
@@ -237,9 +251,13 @@ class ArticleController extends Controller
      */
     public function update(Request $request, string $id): JsonResponse
     {
+        if (Auth::user()->cannot(Permissions::STOCK_EDIT)) {
+            return response()->json(['success' => false, 'message' => 'Non autorisé'], 403);
+        }
+
         try {
             $article = Article::where('id', $id)
-                ->where('user_id', Auth::id())
+                ->where('user_id', CurrentAccount::id())
                 ->with('user.settings') // Charger les settings pour le calcul de low_stock
                 ->first();
 
@@ -259,7 +277,7 @@ class ArticleController extends Controller
             }
 
             $rules = [
-                'name' => 'required|string|max:255|unique:articles,name,' . $id . ',id,user_id,' . Auth::id(),
+                'name' => 'required|string|max:255|unique:articles,name,' . $id . ',id,user_id,' . CurrentAccount::id(),
                 'image' => 'nullable|string|max:255',
             ];
             $messages = [
@@ -336,9 +354,13 @@ class ArticleController extends Controller
      */
     public function destroy(string $id): JsonResponse
     {
+        if (Auth::user()->cannot(Permissions::STOCK_EDIT)) {
+            return response()->json(['success' => false, 'message' => 'Non autorisé'], 403);
+        }
+
         try {
             $article = Article::where('id', $id)
-                ->where('user_id', Auth::id())
+                ->where('user_id', CurrentAccount::id())
                 ->with('user.settings') // Charger les settings pour le calcul de low_stock
                 ->first();
 
@@ -369,8 +391,12 @@ class ArticleController extends Controller
      */
     public function deleteAll(): JsonResponse
     {
+        if (Auth::user()->cannot(Permissions::STOCK_EDIT)) {
+            return response()->json(['success' => false, 'message' => 'Non autorisé'], 403);
+        }
+
         try {
-            $userId = Auth::id();
+            $userId = CurrentAccount::id();
 
             // Compter les articles avant suppression
             $count = Article::where('user_id', $userId)->count();
@@ -402,10 +428,14 @@ class ArticleController extends Controller
      */
     public function addStock(Request $request, string $id): JsonResponse
     {
+        if (Auth::user()->cannot(Permissions::STOCK_RESTOCK)) {
+            return response()->json(['success' => false, 'message' => 'Non autorisé'], 403);
+        }
+
         try {
             // Récupérer l'article appartenant à l'utilisateur connecté
             $article = Article::where('id', $id)
-                ->where('user_id', Auth::id())
+                ->where('user_id', CurrentAccount::id())
                 ->first();
 
             if (!$article) {
@@ -483,7 +513,8 @@ class ArticleController extends Controller
                 }
 
                 StockReplenishment::create([
-                    'user_id' => Auth::id(),
+                    'user_id' => CurrentAccount::id(),
+                    'created_by_user_id' => CurrentAccount::actorId(),
                     'article_id' => $article->id,
                     'variation_id' => $variation?->id,
                     'quantity_added' => $quantityToAdd,
@@ -529,10 +560,14 @@ class ArticleController extends Controller
      */
     public function stockHistory(Request $request, string $id): JsonResponse
     {
+        if (Auth::user()->cannot(Permissions::STOCK_VIEW)) {
+            return response()->json(['success' => false, 'message' => 'Non autorisé'], 403);
+        }
+
         try {
             // Vérifier que l'article existe et appartient à l'utilisateur
             $article = Article::where('id', $id)
-                ->where('user_id', Auth::id())
+                ->where('user_id', CurrentAccount::id())
                 ->first();
 
             if (!$article) {

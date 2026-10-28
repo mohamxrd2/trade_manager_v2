@@ -4,6 +4,8 @@ namespace App\Http\Controllers\API;
 
 use App\Http\Controllers\Controller;
 use App\Models\Client;
+use App\Support\CurrentAccount;
+use App\Support\Permissions;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
@@ -22,8 +24,12 @@ class ClientController extends Controller
      */
     public function index(Request $request): JsonResponse
     {
+        if (Auth::user()->cannot(Permissions::CLIENTS_VIEW)) {
+            return response()->json(['success' => false, 'message' => 'Non autorisé'], 403);
+        }
+
         try {
-            $query = Client::where('user_id', Auth::id())
+            $query = Client::where('user_id', CurrentAccount::id())
                 ->withCount('invoices');
 
             // Recherche par nom ou email
@@ -74,6 +80,10 @@ class ClientController extends Controller
      */
     public function store(Request $request): JsonResponse
     {
+        if (Auth::user()->cannot(Permissions::CLIENTS_MANAGE)) {
+            return response()->json(['success' => false, 'message' => 'Non autorisé'], 403);
+        }
+
         try {
             $validator = Validator::make($request->all(), [
                 'name' => 'required|string|max:255',
@@ -99,7 +109,7 @@ class ClientController extends Controller
             }
 
             $client = Client::create([
-                'user_id' => Auth::id(),
+                'user_id' => CurrentAccount::id(),
                 'name' => $request->name,
                 'email' => $request->email,
                 'phone' => $request->phone,
@@ -130,9 +140,13 @@ class ClientController extends Controller
      */
     public function show(string $id): JsonResponse
     {
+        if (Auth::user()->cannot(Permissions::CLIENTS_VIEW)) {
+            return response()->json(['success' => false, 'message' => 'Non autorisé'], 403);
+        }
+
         try {
             $client = Client::where('id', $id)
-                ->where('user_id', Auth::id())
+                ->where('user_id', CurrentAccount::id())
                 ->with(['invoices' => function ($query) {
                     $query->orderBy('created_at', 'desc')->limit(10);
                 }])
@@ -166,9 +180,13 @@ class ClientController extends Controller
      */
     public function update(Request $request, string $id): JsonResponse
     {
+        if (Auth::user()->cannot(Permissions::CLIENTS_MANAGE)) {
+            return response()->json(['success' => false, 'message' => 'Non autorisé'], 403);
+        }
+
         try {
             $client = Client::where('id', $id)
-                ->where('user_id', Auth::id())
+                ->where('user_id', CurrentAccount::id())
                 ->first();
 
             if (!$client) {
@@ -232,9 +250,13 @@ class ClientController extends Controller
      */
     public function destroy(string $id): JsonResponse
     {
+        if (Auth::user()->cannot(Permissions::CLIENTS_MANAGE)) {
+            return response()->json(['success' => false, 'message' => 'Non autorisé'], 403);
+        }
+
         try {
             $client = Client::where('id', $id)
-                ->where('user_id', Auth::id())
+                ->where('user_id', CurrentAccount::id())
                 ->first();
 
             if (!$client) {
@@ -275,8 +297,12 @@ class ClientController extends Controller
      */
     public function dropdown(): JsonResponse
     {
+        if (Auth::user()->cannot(Permissions::CLIENTS_VIEW)) {
+            return response()->json(['success' => false, 'message' => 'Non autorisé'], 403);
+        }
+
         try {
-            $clients = Client::where('user_id', Auth::id())
+            $clients = Client::where('user_id', CurrentAccount::id())
                 ->select('id', 'name', 'email', 'phone')
                 ->orderBy('name', 'asc')
                 ->get();

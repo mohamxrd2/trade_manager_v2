@@ -3,6 +3,9 @@
 namespace App\Http\Controllers\API;
 
 use App\Http\Controllers\Controller;
+use App\Models\Company;
+use App\Support\CurrentAccount;
+use App\Support\Permissions;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
@@ -24,9 +27,12 @@ class CompanyController extends Controller
      */
     public function onboardingStatus(Request $request): JsonResponse
     {
+        if (Auth::user()->cannot(Permissions::SETTINGS_MANAGE)) {
+            return response()->json(['success' => false, 'message' => 'Non autorisé'], 403);
+        }
+
         try {
-            $user = Auth::user();
-            $company = $user->company;
+            $company = Company::where('user_id', CurrentAccount::id())->first();
 
             if (!$company) {
                 return response()->json([
@@ -83,9 +89,12 @@ class CompanyController extends Controller
      */
     public function completeOnboarding(Request $request): JsonResponse
     {
+        if (Auth::user()->cannot(Permissions::SETTINGS_MANAGE)) {
+            return response()->json(['success' => false, 'message' => 'Non autorisé'], 403);
+        }
+
         try {
-            $user = Auth::user();
-            $company = $user->company;
+            $company = Company::where('user_id', CurrentAccount::id())->first();
 
             if (!$company) {
                 return response()->json([
@@ -195,9 +204,12 @@ class CompanyController extends Controller
      */
     public function show(): JsonResponse
     {
+        if (Auth::user()->cannot(Permissions::SETTINGS_MANAGE)) {
+            return response()->json(['success' => false, 'message' => 'Non autorisé'], 403);
+        }
+
         try {
-            $user = Auth::user();
-            $company = $user->company;
+            $company = Company::where('user_id', CurrentAccount::id())->first();
 
             if (!$company) {
                 return response()->json([
@@ -226,16 +238,19 @@ class CompanyController extends Controller
      */
     public function update(Request $request): JsonResponse
     {
+        if (Auth::user()->cannot(Permissions::SETTINGS_MANAGE)) {
+            return response()->json(['success' => false, 'message' => 'Non autorisé'], 403);
+        }
+
         try {
-            $user = Auth::user();
-            $company = $user->company;
+            $company = Company::where('user_id', CurrentAccount::id())->first();
 
             // Première sauvegarde (onboarding, étape 2) : pas encore de ligne
             // Company pour cet utilisateur — on la crée au lieu de 404, pour
             // que ce même endpoint serve aussi bien la création initiale que
             // les modifications ultérieures depuis Paramètres > Entreprise.
             if (!$company) {
-                $company = new \App\Models\Company(['user_id' => $user->id]);
+                $company = new Company(['user_id' => CurrentAccount::id()]);
             }
 
             $validator = Validator::make($request->all(), [
@@ -316,9 +331,12 @@ class CompanyController extends Controller
      */
     public function uploadLogo(Request $request): JsonResponse
     {
+        if (Auth::user()->cannot(Permissions::SETTINGS_MANAGE)) {
+            return response()->json(['success' => false, 'message' => 'Non autorisé'], 403);
+        }
+
         try {
-            $user = Auth::user();
-            $company = $user->company;
+            $company = Company::where('user_id', CurrentAccount::id())->first();
 
             if (!$company) {
                 return response()->json([
@@ -381,9 +399,12 @@ class CompanyController extends Controller
      */
     public function deleteLogo(): JsonResponse
     {
+        if (Auth::user()->cannot(Permissions::SETTINGS_MANAGE)) {
+            return response()->json(['success' => false, 'message' => 'Non autorisé'], 403);
+        }
+
         try {
-            $user = Auth::user();
-            $company = $user->company;
+            $company = Company::where('user_id', CurrentAccount::id())->first();
 
             if (!$company) {
                 return response()->json([
