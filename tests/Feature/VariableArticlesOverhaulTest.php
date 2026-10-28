@@ -184,6 +184,7 @@ function createVariableArticlesSchema(): void
     Schema::create('invoices', function (Blueprint $table) {
         $table->uuid('id')->primary();
         $table->uuid('user_id');
+        $table->uuid('created_by_user_id')->nullable();
         $table->uuid('company_id');
         $table->uuid('client_id');
         $table->string('invoice_number')->unique();
@@ -226,6 +227,7 @@ function createVariableArticlesSchema(): void
     Schema::create('stock_replenishments', function (Blueprint $table) {
         $table->uuid('id')->primary();
         $table->uuid('user_id');
+        $table->uuid('created_by_user_id')->nullable();
         $table->uuid('article_id');
         $table->uuid('variation_id')->nullable();
         $table->unsignedInteger('quantity_added');

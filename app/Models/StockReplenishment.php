@@ -23,6 +23,7 @@ class StockReplenishment extends Model
      */
     protected $fillable = [
         'user_id',
+        'created_by_user_id',
         'article_id',
         'variation_id',
         'quantity_added',
