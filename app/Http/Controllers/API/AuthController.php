@@ -9,6 +9,7 @@ use App\Models\Company;
 use App\Models\User;
 use App\Models\UserSetting;
 use App\Support\CurrentAccount;
+use App\Support\Permissions;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
@@ -28,6 +29,21 @@ class AuthController extends Controller
      * Nombre maximum de tentatives incorrectes avant invalidation du code.
      */
     private const MAX_ATTEMPTS = 5;
+
+    /**
+     * Champs financiers GLOBAUX du compte masqués dans GET /api/user pour
+     * un membre sans wallet.view_balance — voir user() plus bas.
+     */
+    private const HIDDEN_FINANCIAL_FIELDS = [
+        'balance',
+        'total_sale',
+        'total_expense',
+        'calculated_wallet',
+        'wallet',
+        'total_deposit',
+        'total_withdrawal',
+        'company_share',
+    ];
 
     /**
      * Step 1 de l'inscription : valide les données, génère un code à 5
@@ -359,13 +375,23 @@ class AuthController extends Controller
 
         // Charger l'entreprise/les paramètres DU COMPTE — un membre n'a pas
         // sa propre entreprise ni ses propres paramètres, il utilise ceux du
-        // propriétaire (voir User::accountId()). Les champs financiers
-        // globaux (balance, total_sale, wallet, company_share...) restent à
-        // masquer conditionnellement pour les membres — voir tâche #193.
+        // propriétaire (voir User::accountId()).
         $user->setRelation('company', Company::where('user_id', CurrentAccount::id())->first());
         $user->setRelation('settings', UserSetting::where('user_id', CurrentAccount::id())->first());
 
-        // Retourner directement l'utilisateur (format simplifié)
-        return response()->json($user);
+        $payload = $user->toArray();
+
+        // Un membre sans wallet.view_balance (ex. caissier) ne doit jamais
+        // voir la position financière GLOBALE du compte — à la place
+        // l'étape 2 affichera "la caisse du jour" ; ici on masque seulement,
+        // on ne remplace pas encore. Le propriétaire et tout membre ayant la
+        // permission (manager, accountant) gardent ces champs inchangés.
+        if (!Permissions::userHas($user, Permissions::WALLET_VIEW_BALANCE)) {
+            foreach (self::HIDDEN_FINANCIAL_FIELDS as $field) {
+                unset($payload[$field]);
+            }
+        }
+
+        return response()->json($payload);
     }
 }
