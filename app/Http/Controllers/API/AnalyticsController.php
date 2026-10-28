@@ -24,25 +24,28 @@ class AnalyticsController extends Controller
     public function summary(Request $request): JsonResponse
     {
         $period = $request->input('period', '30d');
-
-        if (!in_array($period, ['today', '7d', '30d', '12m'], true)) {
-            return response()->json([
-                'success' => false,
-                'message' => "Période invalide : {$period}",
-            ], 422);
-        }
+        $from = $request->input('from') ?? $request->input('start_date');
+        $to = $request->input('to') ?? $request->input('end_date');
 
         try {
-            $cacheKey = 'analytics_summary:' . Auth::id() . ':' . $period;
+            // La canonicalisation (ex. '30' -> '30d') fait partie de la clé de
+            // cache pour ne jamais mélanger deux alias de la même période.
+            $canonical = \App\Services\AnalyticsPeriod::canonicalize($period);
+            $cacheKey = 'analytics_summary:' . Auth::id() . ':' . $canonical . ':' . ($from ?? '') . ':' . ($to ?? '');
 
-            $data = \Illuminate\Support\Facades\Cache::remember($cacheKey, 60, function () use ($period) {
-                return (new \App\Services\AnalyticsSummaryService())->summary(Auth::id(), $period);
+            $data = \Illuminate\Support\Facades\Cache::remember($cacheKey, 60, function () use ($period, $from, $to) {
+                return (new \App\Services\AnalyticsSummaryService())->summary(Auth::id(), $period, $from, $to);
             });
 
             return response()->json([
                 'success' => true,
                 'data' => $data,
             ]);
+        } catch (\InvalidArgumentException $e) {
+            return response()->json([
+                'success' => false,
+                'message' => $e->getMessage(),
+            ], 422);
         } catch (\Exception $e) {
             return response()->json([
                 'success' => false,
