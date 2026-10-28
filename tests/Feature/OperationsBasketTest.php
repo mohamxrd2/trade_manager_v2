@@ -19,6 +19,7 @@ use Illuminate\Support\Str;
 */
 function createOperationsBasketTestSchema(): void
 {
+    Schema::dropIfExists('activity_logs');
     Schema::dropIfExists('notifications');
     Schema::dropIfExists('transactions');
     Schema::dropIfExists('operations');
@@ -82,6 +83,19 @@ function createOperationsBasketTestSchema(): void
         $table->uuid('user_id');
         $table->string('name');
         $table->timestamps();
+    });
+
+    // ActivityLogger::log() (chantier "Équipe") est appelé par
+    // OperationController::destroy()/restore().
+    Schema::create('activity_logs', function (Blueprint $table) {
+        $table->uuid('id')->primary();
+        $table->uuid('account_id');
+        $table->uuid('user_id');
+        $table->string('action');
+        $table->string('subject_type')->nullable();
+        $table->uuid('subject_id')->nullable();
+        $table->json('details')->nullable();
+        $table->timestamp('created_at')->useCurrent();
     });
 
     Schema::create('transactions', function (Blueprint $table) {

@@ -31,7 +31,7 @@ function createDepositWithdrawalTestSchema(): void
     // tables de tous les tests Feature existants (voir
     // VariableArticlesOverhaulTest.php, le plus complet) + `collaborators`.
     foreach ([
-        'notifications', 'stock_replenishments', 'invoice_items', 'invoices',
+        'activity_logs', 'notifications', 'stock_replenishments', 'invoice_items', 'invoices',
         'clients', 'companies', 'variations', 'articles', 'collaborators',
         'transactions', 'operations', 'operation_counters', 'user_settings', 'users',
     ] as $table) {
@@ -93,6 +93,19 @@ function createDepositWithdrawalTestSchema(): void
         $table->uuid('operation_id')->nullable();
         $table->timestamps();
         $table->softDeletes();
+    });
+
+    // ActivityLogger::log() (chantier "Équipe") est appelé par
+    // TransactionController::destroy()/restore().
+    Schema::create('activity_logs', function (Blueprint $table) {
+        $table->uuid('id')->primary();
+        $table->uuid('account_id');
+        $table->uuid('user_id');
+        $table->string('action');
+        $table->string('subject_type')->nullable();
+        $table->uuid('subject_id')->nullable();
+        $table->json('details')->nullable();
+        $table->timestamp('created_at')->useCurrent();
     });
 
     // operations/operation_counters : Transaction::booted() crée

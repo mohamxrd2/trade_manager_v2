@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\API;
 
 use App\Http\Controllers\Controller;
+use App\Support\ActivityLogger;
 use App\Support\CurrentAccount;
 use App\Support\Permissions;
 use App\Models\Article;
@@ -273,6 +274,8 @@ class VariationController extends Controller
                 ], 400);
             }
 
+            $previousPrice = $variation->price;
+
             // Pas de plafond lié à article.quantity (supprimé).
             $variation->update([
                 'name' => trim($request->name),
@@ -281,6 +284,13 @@ class VariationController extends Controller
                 'cost_price' => $request->cost_price,
                 'image' => $request->image,
             ]);
+
+            if (bccomp((string) $previousPrice, (string) $request->price, 2) !== 0) {
+                ActivityLogger::log(Auth::id(), 'variation.price_changed', Variation::class, $variation->id, [
+                    'from' => $previousPrice,
+                    'to' => $request->price,
+                ]);
+            }
 
             // Charger les relations nécessaires pour les accessors
             $variation->load('article.user.settings');

@@ -21,7 +21,7 @@ use Illuminate\Support\Str;
 */
 function createTransactionDeletionTestSchema(): void
 {
-    foreach (['notifications', 'transactions', 'operations', 'operation_counters', 'invoices', 'variations', 'articles', 'user_settings', 'users'] as $table) {
+    foreach (['activity_logs', 'notifications', 'transactions', 'operations', 'operation_counters', 'invoices', 'variations', 'articles', 'user_settings', 'users'] as $table) {
         Schema::dropIfExists($table);
     }
 
@@ -145,6 +145,21 @@ function createTransactionDeletionTestSchema(): void
         $table->uuid('article_id')->nullable();
         $table->string('action_url')->nullable();
         $table->timestamps();
+    });
+
+    // ActivityLogger::log() (chantier "Équipe") est appelé par
+    // TransactionController::destroy()/restore() — table nécessaire dès
+    // qu'un test exerce ces deux actions, pas seulement les tests dédiés au
+    // journal d'activité.
+    Schema::create('activity_logs', function (Blueprint $table) {
+        $table->uuid('id')->primary();
+        $table->uuid('account_id');
+        $table->uuid('user_id');
+        $table->string('action');
+        $table->string('subject_type')->nullable();
+        $table->uuid('subject_id')->nullable();
+        $table->json('details')->nullable();
+        $table->timestamp('created_at')->useCurrent();
     });
 }
 

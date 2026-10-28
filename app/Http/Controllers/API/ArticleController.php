@@ -7,6 +7,7 @@ use App\Models\Article;
 use App\Models\StockReplenishment;
 use App\Models\Variation;
 use App\Services\ArticleStockService;
+use App\Support\ActivityLogger;
 use App\Support\CurrentAccount;
 use App\Support\Permissions;
 use Illuminate\Http\JsonResponse;
@@ -318,12 +319,21 @@ class ArticleController extends Controller
                 'image' => $request->image,
             ];
 
+            $previousSalePrice = $article->sale_price;
+
             if ($article->type === 'simple') {
                 $updateData['sale_price'] = $request->sale_price;
                 $updateData['quantity'] = $request->quantity;
             }
 
             $article->update($updateData);
+
+            if ($article->type === 'simple' && bccomp((string) $previousSalePrice, (string) $request->sale_price, 2) !== 0) {
+                ActivityLogger::log(Auth::id(), 'article.price_changed', Article::class, $article->id, [
+                    'from' => $previousSalePrice,
+                    'to' => $request->sale_price,
+                ]);
+            }
 
             // Charger les relations nécessaires pour les accessors
             $article->load('user.settings');

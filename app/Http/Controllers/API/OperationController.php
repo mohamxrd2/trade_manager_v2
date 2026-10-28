@@ -8,6 +8,7 @@ use App\Http\Controllers\Controller;
 use App\Models\Operation;
 use App\Services\OperationService;
 use App\Services\TransactionSearchParser;
+use App\Support\ActivityLogger;
 use App\Support\CurrentAccount;
 use App\Support\Permissions;
 use Illuminate\Http\JsonResponse;
@@ -564,6 +565,10 @@ class OperationController extends Controller
                 OperationService::delete($operation);
             });
 
+            ActivityLogger::log(Auth::id(), 'operation.deleted', Operation::class, $operation->id, [
+                'code' => $operation->code,
+            ]);
+
             return response()->json([
                 'success' => true,
                 'message' => 'Opération supprimée avec succès',
@@ -610,6 +615,10 @@ class OperationController extends Controller
                 OperationService::restore($operation);
                 return $operation;
             });
+
+            ActivityLogger::log(Auth::id(), 'operation.restored', Operation::class, $operation->id, [
+                'code' => $operation->code,
+            ]);
 
             return response()->json([
                 'success' => true,

@@ -26,7 +26,7 @@ use Illuminate\Support\Str;
 function createVariableArticlesSchema(): void
 {
     foreach ([
-        'notifications', 'stock_replenishments', 'invoice_items', 'invoices',
+        'activity_logs', 'notifications', 'stock_replenishments', 'invoice_items', 'invoices',
         'clients', 'companies', 'transactions', 'operations', 'operation_counters', 'variations', 'articles',
         'user_settings', 'users',
     ] as $table) {
@@ -57,6 +57,20 @@ function createVariableArticlesSchema(): void
         $table->boolean('notify_stock_low')->default(true);
         $table->string('language')->default('fr');
         $table->timestamps();
+    });
+
+    // ActivityLogger::log() (chantier "Équipe") est appelé par
+    // ArticleController::update() (changement de prix) et
+    // TransactionController::destroy().
+    Schema::create('activity_logs', function (Blueprint $table) {
+        $table->uuid('id')->primary();
+        $table->uuid('account_id');
+        $table->uuid('user_id');
+        $table->string('action');
+        $table->string('subject_type')->nullable();
+        $table->uuid('subject_id')->nullable();
+        $table->json('details')->nullable();
+        $table->timestamp('created_at')->useCurrent();
     });
 
     Schema::create('articles', function (Blueprint $table) {

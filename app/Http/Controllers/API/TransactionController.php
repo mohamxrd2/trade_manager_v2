@@ -11,6 +11,7 @@ use App\Models\Variation;
 use App\Services\NotificationService;
 use App\Services\OperationService;
 use App\Services\TransactionSearchParser;
+use App\Support\ActivityLogger;
 use App\Support\CurrentAccount;
 use App\Support\Permissions;
 use Illuminate\Http\JsonResponse;
@@ -1045,6 +1046,8 @@ class TransactionController extends Controller
                 // les agrégats withSum()/sum() utilisés pour le stock et le wallet).
                 $transaction->delete();
 
+                ActivityLogger::log(Auth::id(), 'transaction.deleted', Transaction::class, $transaction->id);
+
                 return response()->json([
                     'success' => true,
                     'message' => 'Transaction supprimée avec succès'
@@ -1098,6 +1101,8 @@ class TransactionController extends Controller
 
             return DB::transaction(function () use ($transaction) {
                 $transaction->restore();
+
+                ActivityLogger::log(Auth::id(), 'transaction.restored', Transaction::class, $transaction->id);
 
                 return response()->json([
                     'success' => true,
