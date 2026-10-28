@@ -2,12 +2,15 @@
 
 namespace App\Providers;
 
+use App\Models\User;
 use App\Models\Variation;
 use App\Observers\VariationObserver;
+use App\Support\Permissions;
 use Illuminate\Console\Events\CommandStarting;
 use Illuminate\Support\ServiceProvider;
 use Illuminate\Support\Facades\Cookie;
 use Illuminate\Support\Facades\Event;
+use Illuminate\Support\Facades\Gate;
 use Illuminate\Support\Facades\URL;
 
 class AppServiceProvider extends ServiceProvider
@@ -28,6 +31,7 @@ class AppServiceProvider extends ServiceProvider
 
         $this->guardStagingDatabase();
         $this->guardDestructiveCommandsOutsideLocal();
+        $this->registerPermissionGate();
 
         // En production, forcer HTTPS si nécessaire
         if (env('APP_ENV') === 'production' && env('FORCE_HTTPS', false)) {
@@ -42,6 +46,34 @@ class AppServiceProvider extends ServiceProvider
             // 'none' nécessite Secure=true qui nécessite HTTPS
             // On laisse la configuration par défaut dans config/session.php
         }
+    }
+
+    /**
+     * Chantier "Équipe" — point de vérification UNIQUE pour
+     * `$user->can('xxx')`. IMPORTANT : ceci ne court-circuite JAMAIS les
+     * abilities de Policy (ex. "view"/"delete"/"restore" sur
+     * Transaction/Operation) — un bypass inconditionnel pour
+     * `$user->isOwner()` autoriserait N'IMPORTE QUEL propriétaire (même
+     * d'un AUTRE compte) à passer la vérification d'appartenance au compte
+     * faite DANS la Policy, ce qui casserait l'isolation entre comptes
+     * (régression constatée : un propriétaire intrus pouvait supprimer la
+     * transaction d'un autre compte). Seule une chaîne de permission connue
+     * (Permissions::ALL) est tranchée ICI, directement en true/false — et
+     * Permissions::userHas() y traite déjà le propriétaire comme ayant
+     * toujours tout (voir User::isOwner()). Pour toute autre ability, on
+     * renvoie `null` pour laisser Laravel poursuivre sa résolution normale
+     * (Policy correspondante, qui vérifie elle-même le compte ET la
+     * permission — y compris pour le propriétaire).
+     */
+    private function registerPermissionGate(): void
+    {
+        Gate::before(function (User $user, string $ability) {
+            if (in_array($ability, Permissions::ALL, true)) {
+                return Permissions::userHas($user, $ability);
+            }
+
+            return null;
+        });
     }
 
     /**

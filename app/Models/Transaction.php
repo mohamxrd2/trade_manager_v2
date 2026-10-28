@@ -86,6 +86,7 @@ class Transaction extends Model
 
             $operation = Operation::create([
                 'user_id' => $transaction->user_id,
+                'created_by_user_id' => \Illuminate\Support\Facades\Auth::id(),
                 'type' => $transaction->type,
                 'code' => OperationCodeGenerator::next($transaction->user_id, $transaction->type, $occurredAt),
                 'payment_method' => $transaction->payment_method,

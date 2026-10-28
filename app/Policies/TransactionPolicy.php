@@ -4,67 +4,70 @@ namespace App\Policies;
 
 use App\Models\Transaction;
 use App\Models\User;
-use Illuminate\Auth\Access\Response;
+use App\Support\Permissions;
 
 /**
- * Autorisation centralisée pour les transactions. Pour l'instant, seul le
- * propriétaire du compte (créateur de la transaction) peut la supprimer ou
- * la restaurer — les rôles d'équipe (collaborateurs) viendront plus tard
- * s'ajouter ici, sans changer les appels à `authorize()` dans le contrôleur.
+ * Chantier "Équipe" — même convention que OperationPolicy : ces méthodes
+ * s'exécutent pour TOUT utilisateur, propriétaire compris (voir le
+ * commentaire détaillé dans OperationPolicy et
+ * AppServiceProvider::registerPermissionGate() pour la raison : un bypass
+ * inconditionnel casserait l'isolation entre comptes).
  */
 class TransactionPolicy
 {
-    /**
-     * Determine whether the user can view any models.
-     */
     public function viewAny(User $user): bool
     {
         return false;
     }
 
-    /**
-     * Determine whether the user can view the model.
-     */
     public function view(User $user, Transaction $transaction): bool
     {
-        return false;
+        if ($user->accountId() !== $transaction->user_id) {
+            return false;
+        }
+
+        if (Permissions::userHas($user, Permissions::SALES_VIEW_ALL)) {
+            return true;
+        }
+
+        return Permissions::userHas($user, Permissions::SALES_VIEW_OWN)
+            && $transaction->operation?->created_by_user_id === $user->id;
     }
 
-    /**
-     * Determine whether the user can create models.
-     */
     public function create(User $user): bool
     {
         return false;
     }
 
-    /**
-     * Determine whether the user can update the model.
-     */
     public function update(User $user, Transaction $transaction): bool
     {
         return false;
     }
 
-    /**
-     * Determine whether the user can delete the model.
-     */
     public function delete(User $user, Transaction $transaction): bool
     {
-        return $user->id === $transaction->user_id;
+        if ($user->accountId() !== $transaction->user_id) {
+            return false;
+        }
+
+        if (Permissions::userHas($user, Permissions::SALES_DELETE_ANY)) {
+            return true;
+        }
+
+        if (!Permissions::userHas($user, Permissions::SALES_DELETE_OWN_RECENT)) {
+            return false;
+        }
+
+        $createdBy = $transaction->operation?->created_by_user_id;
+
+        return $createdBy === $user->id && $transaction->created_at?->gt(now()->subMinutes(10));
     }
 
-    /**
-     * Determine whether the user can restore the model.
-     */
     public function restore(User $user, Transaction $transaction): bool
     {
-        return $user->id === $transaction->user_id;
+        return $this->delete($user, $transaction);
     }
 
-    /**
-     * Determine whether the user can permanently delete the model.
-     */
     public function forceDelete(User $user, Transaction $transaction): bool
     {
         return false;

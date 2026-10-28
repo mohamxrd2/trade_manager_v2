@@ -31,6 +31,10 @@ class User extends Authenticatable
         'profile_image',
         'provider',
         'provider_id',
+        'account_id',
+        'role',
+        'must_change_password',
+        'status',
     ];
 
     /**
@@ -73,7 +77,51 @@ class User extends Authenticatable
             'email_verified_at' => 'datetime',
             'password' => 'hashed',
             'company_share' => 'decimal:2',
+            'must_change_password' => 'boolean',
+            'last_login_at' => 'datetime',
         ];
+    }
+
+    /**
+     * Chantier "Équipe" — id du COMPTE auquel ce user appartient : le sien
+     * propre s'il est propriétaire (account_id NULL), sinon celui du
+     * propriétaire auquel il est rattaché. Toutes les données métier
+     * (articles, opérations, transactions, factures, clients, paramètres,
+     * associés) sont scopées sur CETTE valeur, jamais sur `$this->id`
+     * directement — voir App\Support\CurrentAccount, utilisé dans les
+     * contrôleurs à la place de Auth::id().
+     */
+    public function accountId(): string
+    {
+        return $this->account_id ?? $this->id;
+    }
+
+    public function isOwner(): bool
+    {
+        return $this->account_id === null;
+    }
+
+    public function isMember(): bool
+    {
+        return $this->account_id !== null;
+    }
+
+    /**
+     * Le compte propriétaire (uniquement pertinent pour un membre — null
+     * pour un propriétaire, qui EST son propre compte).
+     */
+    public function account(): \Illuminate\Database\Eloquent\Relations\BelongsTo
+    {
+        return $this->belongsTo(User::class, 'account_id');
+    }
+
+    /**
+     * Les membres rattachés à ce compte (vide pour un membre : seul un
+     * propriétaire a des membres).
+     */
+    public function members(): HasMany
+    {
+        return $this->hasMany(User::class, 'account_id');
     }
 
     /**
