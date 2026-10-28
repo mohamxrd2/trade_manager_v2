@@ -6,84 +6,96 @@ use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
 
 /**
- * Chantier "stats-paiements" : agrège les 5 blocs de la page Analyses
- * (kpis, répartition par moyen de paiement, heatmap d'affluence, top
- * variations, trésorerie) pour une période donnée, en un seul passage.
+ * Chantier "stats-paiements" (puis fix/analytics-zero) : agrège les 7
+ * indicateurs-clés (CA, nombre de ventes, panier moyen, articles/panier,
+ * dépenses, bénéfice net, articles vendus), la répartition par moyen de
+ * paiement, le heatmap d'affluence, le top variations et la trésorerie —
+ * pour une période donnée, en un seul passage.
  *
- * Toutes les requêtes passent par le query builder (DB::table) avec un
- * filtre explicite `whereNull('deleted_at')` sur chaque table jointe — un
- * join brut ne respecte pas le global scope SoftDeletes d'Eloquent, donc ce
- * filtre doit être posé à la main partout où on joint `operations` ou
- * `transactions`.
+ * ROBUSTESSE BACKFILL (bug corrigé ici) : la version précédente
+ * interrogeait exclusivement la table `operations`, qui ne contient les
+ * ventes historiques QUE si `operations:backfill --force` a été exécuté.
+ * Tant que ce n'est pas le cas (ex. production jamais migrée), ces
+ * requêtes ne trouvaient rien — d'où un chiffre d'affaires/nombre de
+ * ventes à zéro alors que les transactions existent bel et bien.
  *
- * Fuseau horaire : Carbon::now('Africa/Abidjan') explicite pour les bornes
- * de période (actuellement équivalent à UTC vu la config app.timezone, mais
- * d'autres fuseaux n'ont pas cette coïncidence — autant être explicite).
- * Les colonnes `occurred_at` elles-même ne sont PAS converties via une
- * fonction SQL de fuseau : elles sont stockées comme de l'UTC qui coïncide
- * numériquement avec l'heure d'Abidjan, donc une extraction directe
- * (EXTRACT/strftime) donne déjà la bonne heure locale.
+ * Toutes les requêtes partent maintenant de `transactions` (la source de
+ * vérité qui existe TOUJOURS, backfill ou non), avec un LEFT JOIN vers
+ * `operations` uniquement pour enrichir trois choses quand une opération
+ * existe : le moyen de paiement (chips de l'encaissement, prioritaire sur
+ * celui de la ligne), la date (`occurred_at`, sinon `transactions.
+ * created_at`) et le regroupement d'un panier multi-lignes en UNE seule
+ * vente (COUNT DISTINCT COALESCE(operation_id, id) — une ligne orpheline
+ * sans opération compte pour 1 vente à elle seule, un panier de 3 lignes
+ * compte pour 1 vente aussi).
  */
 class AnalyticsSummaryService
 {
     public const PAYMENT_METHODS = ['especes', 'orange_money', 'moov_money', 'wave', 'mtn_money', 'virement', 'autre'];
 
-    private const TIMEZONE = 'Africa/Abidjan';
-
-    public function summary(string $userId, string $period): array
+    public function summary(string $userId, string $period, ?string $from = null, ?string $to = null): array
     {
-        [$start, $end, $prevStart, $prevEnd, $granularity] = $this->resolvePeriod($period);
+        $resolved = AnalyticsPeriod::resolve($period, $from, $to);
+        $start = $resolved['start'];
+        $end = $resolved['end'];
+        $prevStart = $resolved['prev_start'];
+        $prevEnd = $resolved['prev_end'];
+        $granularity = $resolved['granularity'];
+
+        $kpis = $this->kpis($userId, $start, $end, $prevStart, $prevEnd);
+        $paymentMethods = $this->paymentMethods($userId, $start, $end, $prevStart, $prevEnd, $granularity);
+        $heatmap = $this->heatmap($userId, $start, $end);
+        $topVariations = $this->topVariations($userId, $start, $end);
+        $treasury = $this->treasury($userId, $start, $end);
+
+        $paymentMethodsTotal = array_sum(array_column($paymentMethods['rows'], 'amount'));
 
         return [
-            'period' => $period,
+            'period' => $resolved['period'],
             'start_date' => $start->toISOString(),
             'end_date' => $end->toISOString(),
-            'kpis' => $this->kpis($userId, $start, $end, $prevStart, $prevEnd),
-            'payment_methods' => $this->paymentMethods($userId, $start, $end, $prevStart, $prevEnd, $granularity),
-            'heatmap' => $this->heatmap($userId, $start, $end),
-            'top_variations' => $this->topVariations($userId, $start, $end),
-            'treasury' => $this->treasury($userId, $start, $end),
+            'kpis' => $kpis,
+            'payment_methods' => $paymentMethods,
+            'heatmap' => $heatmap,
+            'top_variations' => $topVariations,
+            'treasury' => $treasury,
+            // Vérification de cohérence exposée dans la réponse — permet de
+            // détecter immédiatement une future divergence entre les deux
+            // sources (ex. un futur changement qui recasserait l'une des deux
+            // requêtes sans casser l'autre), plutôt que de le découvrir en
+            // production comme pour le bug corrigé ici.
+            'consistency' => [
+                'net_profit_matches' => abs($kpis['net_profit']['value'] - round($kpis['revenue']['value'] - $kpis['expenses']['value'], 2)) < 0.01,
+                'payment_methods_total_matches' => abs($paymentMethodsTotal - $kpis['revenue']['value']) < 0.01,
+            ],
         ];
     }
 
     /**
-     * @return array{0: Carbon, 1: Carbon, 2: Carbon, 3: Carbon, 4: string}
+     * Base commune à toutes les agrégations : transactions non supprimées
+     * de ce type, pour ce compte, datées via COALESCE(operations.
+     * occurred_at, transactions.created_at) dans la période. LEFT JOIN
+     * (jamais INNER) : une ligne SANS opération reste incluse.
      */
-    private function resolvePeriod(string $period): array
+    private function baseQuery(string $userId, string $type, Carbon $start, Carbon $end)
     {
-        $now = Carbon::now(self::TIMEZONE);
+        return DB::table('transactions')
+            ->leftJoin('operations', 'operations.id', '=', 'transactions.operation_id')
+            ->where('transactions.user_id', $userId)
+            ->where('transactions.type', $type)
+            ->whereNull('transactions.deleted_at')
+            ->where(function ($q) {
+                // Une opération liée mais soft-deleted = vente annulée : exclue.
+                // Pas d'opération du tout = ligne orpheline (backfill pas encore
+                // passé) : jamais exclue pour cette seule raison.
+                $q->whereNull('transactions.operation_id')->orWhereNull('operations.deleted_at');
+            })
+            ->whereRaw('COALESCE(operations.occurred_at, transactions.created_at) BETWEEN ? AND ?', [$start, $end]);
+    }
 
-        switch ($period) {
-            case 'today':
-                $start = $now->copy()->startOfDay();
-                $end = $now->copy()->endOfDay();
-                $granularity = 'hour2';
-                break;
-            case '7d':
-                $start = $now->copy()->subDays(6)->startOfDay();
-                $end = $now->copy()->endOfDay();
-                $granularity = 'day';
-                break;
-            case '30d':
-                $start = $now->copy()->subDays(29)->startOfDay();
-                $end = $now->copy()->endOfDay();
-                $granularity = 'day';
-                break;
-            case '12m':
-                $start = $now->copy()->subMonthsNoOverflow(11)->startOfMonth();
-                $end = $now->copy()->endOfDay();
-                $granularity = 'month';
-                break;
-            default:
-                throw new \InvalidArgumentException("Période invalide : {$period}");
-        }
-
-        // Période précédente de même durée, immédiatement avant.
-        $durationSeconds = $start->diffInSeconds($end) + 1;
-        $prevEnd = $start->copy()->subSecond();
-        $prevStart = $prevEnd->copy()->subSeconds($durationSeconds - 1);
-
-        return [$start, $end, $prevStart, $prevEnd, $granularity];
+    private function dateExpression(): string
+    {
+        return 'COALESCE(operations.occurred_at, transactions.created_at)';
     }
 
     // --- KPIs -------------------------------------------------------------
@@ -98,45 +110,39 @@ class AnalyticsSummaryService
             'sales_count' => $this->withVariation($current['sales_count'], $previous['sales_count']),
             'average_basket' => $this->withVariation($current['average_basket'], $previous['average_basket']),
             'items_per_basket' => $this->withVariation($current['items_per_basket'], $previous['items_per_basket']),
+            'items_sold' => $this->withVariation($current['items_sold'], $previous['items_sold']),
+            'expenses' => $this->withVariation($current['expenses'], $previous['expenses']),
+            'net_profit' => $this->withVariation($current['net_profit'], $previous['net_profit']),
         ];
     }
 
-    /**
-     * Chiffre d'affaires = somme des opérations de vente (le total de
-     * l'opération, pas la somme des lignes recalculée) ; nombre de ventes =
-     * nombre d'OPÉRATIONS, pas de lignes (un panier à 3 articles = 1 vente),
-     * convention déjà établie dans AnalyticsController::kpis().
-     */
     private function kpiRaw(string $userId, Carbon $start, Carbon $end): array
     {
-        $row = DB::table('operations')
-            ->where('user_id', $userId)
-            ->where('type', 'sale')
-            ->whereNull('deleted_at')
-            ->whereBetween('occurred_at', [$start, $end])
-            ->selectRaw('COALESCE(SUM(total_amount), 0) as revenue, COUNT(*) as sales_count')
+        $salesRow = $this->baseQuery($userId, 'sale', $start, $end)
+            ->selectRaw('
+                COALESCE(SUM(transactions.amount), 0) as revenue,
+                COALESCE(SUM(transactions.quantity), 0) as items,
+                COUNT(DISTINCT COALESCE(transactions.operation_id, transactions.id)) as sales_count
+            ')
             ->first();
 
-        $revenue = (float) $row->revenue;
-        $salesCount = (int) $row->sales_count;
-
-        $itemsRow = DB::table('transactions')
-            ->join('operations', 'operations.id', '=', 'transactions.operation_id')
-            ->where('operations.user_id', $userId)
-            ->where('operations.type', 'sale')
-            ->whereNull('operations.deleted_at')
-            ->whereNull('transactions.deleted_at')
-            ->whereBetween('operations.occurred_at', [$start, $end])
-            ->selectRaw('COALESCE(SUM(transactions.quantity), 0) as total_items')
+        $expensesRow = $this->baseQuery($userId, 'expense', $start, $end)
+            ->selectRaw('COALESCE(SUM(transactions.amount), 0) as total')
             ->first();
 
-        $totalItems = (float) $itemsRow->total_items;
+        $revenue = (float) $salesRow->revenue;
+        $items = (float) $salesRow->items;
+        $salesCount = (int) $salesRow->sales_count;
+        $expenses = (float) $expensesRow->total;
 
         return [
             'revenue' => $revenue,
             'sales_count' => $salesCount,
             'average_basket' => $salesCount > 0 ? $revenue / $salesCount : 0.0,
-            'items_per_basket' => $salesCount > 0 ? $totalItems / $salesCount : 0.0,
+            'items_per_basket' => $salesCount > 0 ? $items / $salesCount : 0.0,
+            'items_sold' => $items,
+            'expenses' => $expenses,
+            'net_profit' => $revenue - $expenses,
         ];
     }
 
@@ -194,17 +200,30 @@ class AnalyticsSummaryService
     }
 
     /**
+     * Le moyen de paiement vient de l'opération liée si elle existe
+     * (prioritaire — c'est le moyen CONFIRMÉ à l'encaissement), sinon de la
+     * ligne elle-même (transactions.payment_method, renseigné pour les
+     * apports/retraits et les ventes à une ligne), sinon "non_precise"
+     * (anciennes ventes sans aucun des deux).
+     *
      * @return array<string, array{amount: float, count: int}>
      */
     private function paymentMethodRows(string $userId, Carbon $start, Carbon $end): array
     {
-        $results = DB::table('operations')
-            ->where('user_id', $userId)
-            ->where('type', 'sale')
-            ->whereNull('deleted_at')
-            ->whereBetween('occurred_at', [$start, $end])
-            ->selectRaw("COALESCE(payment_method, 'non_precise') as payment_method, SUM(total_amount) as amount, COUNT(*) as count")
-            ->groupBy('payment_method')
+        // GROUP BY l'EXPRESSION complète, pas l'alias "payment_method" — cet
+        // alias est ambigu sous Postgres car il porte le même nom qu'une
+        // colonne réelle présente à la fois dans `operations` ET
+        // `transactions` (déjà rencontré pour "article_id", voir commit
+        // précédent sur top_variations).
+        $paymentMethodExpr = "COALESCE(operations.payment_method, transactions.payment_method, 'non_precise')";
+
+        $results = $this->baseQuery($userId, 'sale', $start, $end)
+            ->selectRaw("
+                {$paymentMethodExpr} as payment_method,
+                SUM(transactions.amount) as amount,
+                COUNT(DISTINCT COALESCE(transactions.operation_id, transactions.id)) as count
+            ")
+            ->groupByRaw($paymentMethodExpr)
             ->get();
 
         $map = [];
@@ -218,19 +237,17 @@ class AnalyticsSummaryService
     /**
      * Série temporelle montant par méthode par intervalle — mêmes
      * intervalles que la courbe "Tendance des ventes" existante (jour pour
-     * 7j/30j, mois pour 12 mois, tranche de 2h pour aujourd'hui).
+     * 7j/30j/90j, mois pour 12 mois, tranche de 2h pour aujourd'hui).
      */
     private function paymentMethodSeries(string $userId, Carbon $start, Carbon $end, string $granularity): array
     {
         $bucketExpr = $this->bucketExpression($granularity);
 
-        $results = DB::table('operations')
-            ->where('user_id', $userId)
-            ->where('type', 'sale')
-            ->whereNull('deleted_at')
-            ->whereBetween('occurred_at', [$start, $end])
-            ->selectRaw("{$bucketExpr} as bucket, COALESCE(payment_method, 'non_precise') as payment_method, SUM(total_amount) as amount")
-            ->groupBy('bucket', 'payment_method')
+        $paymentMethodExpr = "COALESCE(operations.payment_method, transactions.payment_method, 'non_precise')";
+
+        $results = $this->baseQuery($userId, 'sale', $start, $end)
+            ->selectRaw("{$bucketExpr} as bucket, {$paymentMethodExpr} as payment_method, SUM(transactions.amount) as amount")
+            ->groupByRaw("{$bucketExpr}, {$paymentMethodExpr}")
             ->orderBy('bucket')
             ->get();
 
@@ -249,24 +266,25 @@ class AnalyticsSummaryService
     private function bucketExpression(string $granularity): string
     {
         $driver = DB::connection()->getDriverName();
+        $dateExpr = $this->dateExpression();
 
         if ($granularity === 'hour2') {
             // Tranche de 2h : 0,2,4,...,22 — même heure locale que les
             // bornes de période (voir note de classe sur le fuseau).
             return $driver === 'pgsql'
-                ? "(FLOOR(EXTRACT(HOUR FROM occurred_at) / 2) * 2)"
-                : "(CAST(strftime('%H', occurred_at) AS INTEGER) / 2 * 2)";
+                ? "(FLOOR(EXTRACT(HOUR FROM {$dateExpr}) / 2) * 2)"
+                : "(CAST(strftime('%H', {$dateExpr}) AS INTEGER) / 2 * 2)";
         }
 
         if ($granularity === 'month') {
             return $driver === 'pgsql'
-                ? "TO_CHAR(occurred_at, 'YYYY-MM')"
-                : "strftime('%Y-%m', occurred_at)";
+                ? "TO_CHAR({$dateExpr}, 'YYYY-MM')"
+                : "strftime('%Y-%m', {$dateExpr})";
         }
 
         return $driver === 'pgsql'
-            ? "TO_CHAR(occurred_at, 'YYYY-MM-DD')"
-            : "strftime('%Y-%m-%d', occurred_at)";
+            ? "TO_CHAR({$dateExpr}, 'YYYY-MM-DD')"
+            : "strftime('%Y-%m-%d', {$dateExpr})";
     }
 
     // --- Heures d'affluence -------------------------------------------------
@@ -279,21 +297,18 @@ class AnalyticsSummaryService
     private function heatmap(string $userId, Carbon $start, Carbon $end): array
     {
         $driver = DB::connection()->getDriverName();
+        $dateExpr = $this->dateExpression();
 
         if ($driver === 'pgsql') {
-            $dowExpr = 'EXTRACT(DOW FROM occurred_at)';
-            $hourExpr = 'EXTRACT(HOUR FROM occurred_at)';
+            $dowExpr = "EXTRACT(DOW FROM {$dateExpr})";
+            $hourExpr = "EXTRACT(HOUR FROM {$dateExpr})";
         } else {
-            $dowExpr = "CAST(strftime('%w', occurred_at) AS INTEGER)";
-            $hourExpr = "CAST(strftime('%H', occurred_at) AS INTEGER)";
+            $dowExpr = "CAST(strftime('%w', {$dateExpr}) AS INTEGER)";
+            $hourExpr = "CAST(strftime('%H', {$dateExpr}) AS INTEGER)";
         }
 
-        $rows = DB::table('operations')
-            ->where('user_id', $userId)
-            ->where('type', 'sale')
-            ->whereNull('deleted_at')
-            ->whereBetween('occurred_at', [$start, $end])
-            ->selectRaw("{$dowExpr} as day_of_week, {$hourExpr} as hour, SUM(total_amount) as revenue, COUNT(*) as sales_count")
+        $rows = $this->baseQuery($userId, 'sale', $start, $end)
+            ->selectRaw("{$dowExpr} as day_of_week, {$hourExpr} as hour, SUM(transactions.amount) as revenue, COUNT(DISTINCT COALESCE(transactions.operation_id, transactions.id)) as sales_count")
             ->groupBy('day_of_week', 'hour')
             ->get();
 
@@ -313,19 +328,16 @@ class AnalyticsSummaryService
      * Top 10 par chiffre d'affaires. `COALESCE(variable_id, article_id)`
      * regroupe par variation précise si la ligne en a une, sinon par
      * article (cas "simple") — un article simple apparaît donc sous son
-     * seul nom, sans nom de variation.
+     * seul nom, sans nom de variation. Entièrement indépendant de la
+     * présence d'une opération (jamais joint via `operations` ici, sauf
+     * pour la date — transactions.article_id/variable_id existent sur
+     * CHAQUE ligne, backfill ou non).
      */
     private function topVariations(string $userId, Carbon $start, Carbon $end): array
     {
-        $rows = DB::table('transactions')
-            ->join('operations', 'operations.id', '=', 'transactions.operation_id')
+        $rows = $this->baseQuery($userId, 'sale', $start, $end)
             ->leftJoin('variations', 'variations.id', '=', 'transactions.variable_id')
             ->leftJoin('articles', 'articles.id', '=', 'transactions.article_id')
-            ->where('operations.user_id', $userId)
-            ->where('operations.type', 'sale')
-            ->whereNull('operations.deleted_at')
-            ->whereNull('transactions.deleted_at')
-            ->whereBetween('operations.occurred_at', [$start, $end])
             ->selectRaw('
                 COALESCE(transactions.variable_id, transactions.article_id) as group_key,
                 transactions.article_id as article_id,
@@ -359,19 +371,8 @@ class AnalyticsSummaryService
      */
     private function treasury(string $userId, Carbon $start, Carbon $end): array
     {
-        $deposits = (float) DB::table('operations')
-            ->where('user_id', $userId)
-            ->where('type', 'apport')
-            ->whereNull('deleted_at')
-            ->whereBetween('occurred_at', [$start, $end])
-            ->sum('total_amount');
-
-        $withdrawals = (float) DB::table('operations')
-            ->where('user_id', $userId)
-            ->where('type', 'retrait')
-            ->whereNull('deleted_at')
-            ->whereBetween('occurred_at', [$start, $end])
-            ->sum('total_amount');
+        $deposits = (float) $this->baseQuery($userId, 'apport', $start, $end)->sum('transactions.amount');
+        $withdrawals = (float) $this->baseQuery($userId, 'retrait', $start, $end)->sum('transactions.amount');
 
         return [
             'deposits' => round($deposits, 2),

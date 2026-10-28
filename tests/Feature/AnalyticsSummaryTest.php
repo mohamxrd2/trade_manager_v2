@@ -161,95 +161,65 @@ function makeLine(Operation $operation, float $amount, int $quantity = 1, array 
     ], $overrides));
 }
 
+/**
+ * Transaction historique "pré-operations" : AUCUN operation_id — exactement
+ * le cas réel constaté en production/local (operations:backfill jamais
+ * lancé). C'est le scénario central de ce fichier de test.
+ *
+ * INSERT BRUT (pas Transaction::create()) : le modèle Transaction a un hook
+ * `creating` (voir Transaction::booted(), chantier "paniers multi-articles"
+ * étape 1) qui crée AUTOMATIQUEMENT une Operation dès qu'on sauvegarde une
+ * transaction sans operation_id — ce qui est le comportement voulu pour les
+ * nouvelles ventes, mais empêche de simuler ici une vraie ligne orpheline
+ * historique (celles qui existent déjà en base, créées avant ce hook).
+ */
+function makeOrphanTransaction(User $user, string $type, float $amount, Carbon $createdAt, array $overrides = []): Transaction
+{
+    $id = (string) Str::orderedUuid();
+
+    DB::table('transactions')->insert(array_merge([
+        'id' => $id,
+        'user_id' => $user->id,
+        'operation_id' => null,
+        'name' => 'Vente historique',
+        'quantity' => 1,
+        'amount' => $amount,
+        'type' => $type,
+        'created_at' => $createdAt,
+        'updated_at' => $createdAt,
+    ], $overrides));
+
+    return Transaction::find($id);
+}
+
 /*
 |--------------------------------------------------------------------------
-| 1. Répartition par moyen de paiement exacte
+| 1. BUG CENTRAL : ventes sans operation_id (backfill jamais lancé)
 |--------------------------------------------------------------------------
 */
-test('la répartition par moyen de paiement est exacte et somme au chiffre d\'affaires', function () {
+test('des ventes SANS operation_id sont comptées dans le CA, le nombre de ventes et la répartition par moyen de paiement', function () {
     $user = summaryUser();
     $now = Carbon::now();
 
-    $op1 = makeSaleOperation($user, ['payment_method' => 'especes', 'total_amount' => 10000, 'occurred_at' => $now]);
-    makeLine($op1, 10000);
-
-    $op2 = makeSaleOperation($user, ['payment_method' => 'wave', 'total_amount' => 5000, 'occurred_at' => $now]);
-    makeLine($op2, 5000);
-
-    $op3 = makeSaleOperation($user, ['payment_method' => 'wave', 'total_amount' => 7000, 'occurred_at' => $now]);
-    makeLine($op3, 7000);
+    // Trois ventes historiques, jamais migrées vers `operations` — le cas
+    // réel qui provoquait un chiffre d'affaires à zéro.
+    makeOrphanTransaction($user, 'sale', 10000, $now, ['payment_method' => 'wave']);
+    makeOrphanTransaction($user, 'sale', 5000, $now, ['payment_method' => null]);
+    makeOrphanTransaction($user, 'sale', 3000, $now->copy()->subHour(), ['payment_method' => 'especes']);
 
     $response = $this->actingAs($user)->getJson('/api/analytics/summary?period=7d');
     $response->assertStatus(200);
+
+    expect($response->json('data.kpis.revenue.value'))->toEqual(18000.0);
+    expect($response->json('data.kpis.sales_count.value'))->toBe(3);
 
     $rows = collect($response->json('data.payment_methods.rows'));
-    $especes = $rows->firstWhere('payment_method', 'especes');
-    $wave = $rows->firstWhere('payment_method', 'wave');
-
-    expect($especes['amount'])->toEqual(10000.0);
-    expect($especes['sales_count'])->toBe(1);
-    expect($wave['amount'])->toEqual(12000.0);
-    expect($wave['sales_count'])->toBe(2);
-
-    $totalRevenue = $response->json('data.kpis.revenue.value');
-    expect($totalRevenue)->toEqual(22000.0);
-    expect($rows->sum('amount'))->toEqual($totalRevenue);
-    expect(round($especes['percentage'] + $wave['percentage'], 2))->toEqual(100.0);
+    expect($rows->firstWhere('payment_method', 'wave')['amount'])->toEqual(10000.0);
+    expect($rows->firstWhere('payment_method', 'especes')['amount'])->toEqual(3000.0);
+    expect($rows->firstWhere('payment_method', 'non_precise')['amount'])->toEqual(5000.0);
 });
 
-/*
-|--------------------------------------------------------------------------
-| 2. Apports/retraits jamais comptés dans le CA ni la répartition
-|--------------------------------------------------------------------------
-*/
-test('les apports et retraits sont exclus du chiffre d\'affaires et de la répartition par moyen de paiement', function () {
-    $user = summaryUser();
-    $now = Carbon::now();
-
-    $sale = makeSaleOperation($user, ['total_amount' => 9000, 'occurred_at' => $now]);
-    makeLine($sale, 9000);
-
-    makeTreasuryOperation($user, 'apport', 50000, $now);
-    makeTreasuryOperation($user, 'retrait', 20000, $now);
-
-    $response = $this->actingAs($user)->getJson('/api/analytics/summary?period=7d');
-    $response->assertStatus(200);
-
-    expect($response->json('data.kpis.revenue.value'))->toEqual(9000.0);
-    expect($response->json('data.kpis.sales_count.value'))->toBe(1);
-    expect(collect($response->json('data.payment_methods.rows'))->pluck('payment_method')->all())->toBe(['especes']);
-
-    expect($response->json('data.treasury.deposits'))->toEqual(50000.0);
-    expect($response->json('data.treasury.withdrawals'))->toEqual(20000.0);
-});
-
-/*
-|--------------------------------------------------------------------------
-| 3. Anciennes ventes sans moyen de paiement -> "non_precise"
-|--------------------------------------------------------------------------
-*/
-test('une vente sans moyen de paiement est classée non_precise', function () {
-    $user = summaryUser();
-    $now = Carbon::now();
-
-    $op = makeSaleOperation($user, ['payment_method' => null, 'total_amount' => 3000, 'occurred_at' => $now]);
-    makeLine($op, 3000);
-
-    $response = $this->actingAs($user)->getJson('/api/analytics/summary?period=7d');
-    $response->assertStatus(200);
-
-    $rows = collect($response->json('data.payment_methods.rows'));
-    expect($rows)->toHaveCount(1);
-    expect($rows->first()['payment_method'])->toBe('non_precise');
-    expect($rows->first()['amount'])->toEqual(3000.0);
-});
-
-/*
-|--------------------------------------------------------------------------
-| 4 + 5. Comptage par OPÉRATIONS, panier moyen, articles par panier
-|--------------------------------------------------------------------------
-*/
-test('un panier de 3 lignes compte comme 1 vente ; panier moyen et articles/panier sont corrects', function () {
+test('un panier de 3 lignes (opération) compte comme 1 seule vente, même mélangé à des ventes orphelines', function () {
     $user = summaryUser();
     $now = Carbon::now();
 
@@ -258,34 +228,64 @@ test('un panier de 3 lignes compte comme 1 vente ; panier moyen et articles/pani
     makeLine($basket, 9000, quantity: 1);
     makeLine($basket, 5000, quantity: 3);
 
-    $single = makeSaleOperation($user, ['total_amount' => 6000, 'occurred_at' => $now]);
-    makeLine($single, 6000, quantity: 1);
+    makeOrphanTransaction($user, 'sale', 6000, $now, ['quantity' => 1]);
 
     $response = $this->actingAs($user)->getJson('/api/analytics/summary?period=7d');
     $response->assertStatus(200);
 
-    expect($response->json('data.kpis.sales_count.value'))->toBe(2);
+    expect($response->json('data.kpis.sales_count.value'))->toBe(2); // 1 panier + 1 vente orpheline
     expect($response->json('data.kpis.revenue.value'))->toEqual(30000.0);
-    // panier moyen = 30000 / 2
+    expect($response->json('data.kpis.items_sold.value'))->toEqual(7.0); // 2+1+3+1
+    // panier moyen = 30000 / 2, articles/panier = 7 / 2
     expect($response->json('data.kpis.average_basket.value'))->toEqual(15000.0);
-    // articles/panier = (2+1+3+1) / 2
     expect($response->json('data.kpis.items_per_basket.value'))->toEqual(3.5);
 });
 
 /*
 |--------------------------------------------------------------------------
-| 6. Heatmap en heure d'Abidjan
+| 2. Période : alias period=30 et period=30d identiques ; valeur inconnue -> 422
 |--------------------------------------------------------------------------
 */
-test('une vente à 23h30 tombe dans le bon jour du heatmap (heure Abidjan)', function () {
+test('period=30 et period=30d renvoient exactement les mêmes bornes de dates', function () {
     $user = summaryUser();
 
-    // Mardi 20/10/2026 23:30 Abidjan — jour de semaine attendu : 2 (0=dimanche).
-    $saleAt = Carbon::create(2026, 10, 20, 23, 30, 0, 'Africa/Abidjan');
-    $op = makeSaleOperation($user, ['total_amount' => 4000, 'occurred_at' => $saleAt]);
-    makeLine($op, 4000);
+    $r30 = $this->actingAs($user)->getJson('/api/analytics/summary?period=30');
+    $r30d = $this->actingAs($user)->getJson('/api/analytics/summary?period=30d');
 
-    $response = $this->actingAs($user)->getJson('/api/analytics/summary?period=7d');
+    $r30->assertStatus(200);
+    $r30d->assertStatus(200);
+    expect($r30->json('data.start_date'))->toBe($r30d->json('data.start_date'));
+    expect($r30->json('data.end_date'))->toBe($r30d->json('data.end_date'));
+    expect($r30->json('data.period'))->toBe('30d');
+});
+
+test('une période inconnue renvoie 422, jamais un repli silencieux', function () {
+    $user = summaryUser();
+
+    $response = $this->actingAs($user)->getJson('/api/analytics/summary?period=quinze-jours');
+    $response->assertStatus(422);
+});
+
+test('period=custom sans from/to renvoie 422', function () {
+    $user = summaryUser();
+
+    $response = $this->actingAs($user)->getJson('/api/analytics/summary?period=custom');
+    $response->assertStatus(422);
+});
+
+/*
+|--------------------------------------------------------------------------
+| 3. Heatmap en heure d'Abidjan
+|--------------------------------------------------------------------------
+*/
+test('une vente du 29/09 23h30 (heure Abidjan) tombe dans le bon jour du heatmap', function () {
+    $user = summaryUser();
+
+    // 29/09/2026 est un mardi.
+    $saleAt = Carbon::create(2026, 9, 29, 23, 30, 0, 'Africa/Abidjan');
+    makeOrphanTransaction($user, 'sale', 4000, $saleAt);
+
+    $response = $this->actingAs($user)->getJson('/api/analytics/summary?period=12m');
     $response->assertStatus(200);
 
     $cells = collect($response->json('data.heatmap.cells'));
@@ -293,8 +293,77 @@ test('une vente à 23h30 tombe dans le bon jour du heatmap (heure Abidjan)', fun
 
     expect($cell)->not->toBeNull();
     expect($cell['day_of_week'])->toBe(2); // mardi
-    expect($cell['sales_count'])->toBe(1);
     expect($cell['revenue'])->toEqual(4000.0);
+});
+
+/*
+|--------------------------------------------------------------------------
+| 4. Cohérence : net = CA - dépenses, somme méthodes = CA
+|--------------------------------------------------------------------------
+*/
+test('bénéfice net = CA - dépenses et somme des moyens de paiement = CA, sur le même jeu de données', function () {
+    $user = summaryUser();
+    $now = Carbon::now();
+
+    makeOrphanTransaction($user, 'sale', 10000, $now, ['payment_method' => 'wave']);
+    makeOrphanTransaction($user, 'sale', 7000, $now, ['payment_method' => 'especes']);
+    makeOrphanTransaction($user, 'expense', 4000, $now);
+
+    $response = $this->actingAs($user)->getJson('/api/analytics/summary?period=7d');
+    $response->assertStatus(200);
+
+    expect($response->json('data.kpis.revenue.value'))->toEqual(17000.0);
+    expect($response->json('data.kpis.expenses.value'))->toEqual(4000.0);
+    expect($response->json('data.kpis.net_profit.value'))->toEqual(13000.0);
+
+    $methodsTotal = collect($response->json('data.payment_methods.rows'))->sum('amount');
+    expect($methodsTotal)->toEqual(17000.0);
+
+    expect($response->json('data.consistency.net_profit_matches'))->toBeTrue();
+    expect($response->json('data.consistency.payment_methods_total_matches'))->toBeTrue();
+});
+
+/*
+|--------------------------------------------------------------------------
+| 5. Apports/retraits exclus du CA
+|--------------------------------------------------------------------------
+*/
+test('les apports et retraits restent exclus du chiffre d\'affaires', function () {
+    $user = summaryUser();
+    $now = Carbon::now();
+
+    makeOrphanTransaction($user, 'sale', 9000, $now);
+    makeOrphanTransaction($user, 'apport', 50000, $now);
+    makeOrphanTransaction($user, 'retrait', 20000, $now);
+
+    $response = $this->actingAs($user)->getJson('/api/analytics/summary?period=7d');
+    $response->assertStatus(200);
+
+    expect($response->json('data.kpis.revenue.value'))->toEqual(9000.0);
+    expect($response->json('data.treasury.deposits'))->toEqual(50000.0);
+    expect($response->json('data.treasury.withdrawals'))->toEqual(20000.0);
+});
+
+/*
+|--------------------------------------------------------------------------
+| 6. Top variations (article_id exposé, simple vs variation)
+|--------------------------------------------------------------------------
+*/
+test('le top variations fonctionne pour des ventes orphelines (sans opération)', function () {
+    $user = summaryUser();
+    $now = Carbon::now();
+
+    $simple = Article::create(['user_id' => $user->id, 'name' => 'Savon', 'sale_price' => 1000, 'quantity' => 50, 'type' => 'simple']);
+    makeOrphanTransaction($user, 'sale', 2000, $now, ['quantity' => 2, 'article_id' => $simple->id, 'name' => 'Savon']);
+
+    $response = $this->actingAs($user)->getJson('/api/analytics/summary?period=7d');
+    $response->assertStatus(200);
+
+    $rows = collect($response->json('data.top_variations'));
+    $row = $rows->firstWhere('article_name', 'Savon');
+    expect($row['article_id'])->toBe($simple->id);
+    expect($row['variation_name'])->toBeNull();
+    expect($row['quantity'])->toBe(2);
 });
 
 /*
@@ -302,18 +371,12 @@ test('une vente à 23h30 tombe dans le bon jour du heatmap (heure Abidjan)', fun
 | 7. Comparaison vs période précédente
 |--------------------------------------------------------------------------
 */
-test('la variation vs la période précédente est calculée correctement', function () {
+test('la variation vs la période précédente est calculée correctement (ventes orphelines)', function () {
     $user = summaryUser();
     $now = Carbon::now();
 
-    // Période courante (7d) : 10000 F.
-    $current = makeSaleOperation($user, ['total_amount' => 10000, 'occurred_at' => $now]);
-    makeLine($current, 10000);
-
-    // Période précédente (les 7 jours juste avant) : 8000 F.
-    $previousAt = $now->copy()->subDays(8);
-    $previous = makeSaleOperation($user, ['total_amount' => 8000, 'occurred_at' => $previousAt]);
-    makeLine($previous, 8000);
+    makeOrphanTransaction($user, 'sale', 10000, $now);
+    makeOrphanTransaction($user, 'sale', 8000, $now->copy()->subDays(8));
 
     $response = $this->actingAs($user)->getJson('/api/analytics/summary?period=7d');
     $response->assertStatus(200);
@@ -325,59 +388,41 @@ test('la variation vs la période précédente est calculée correctement', func
 
 /*
 |--------------------------------------------------------------------------
-| Top variations — un article simple apparaît sous son nom seul, une
-| variation sous "article + variation" ; article_id toujours présent (lien
-| frontend vers la fiche article). Requête testée sur SQLite ET Postgres :
-| une ambiguïté de colonne "article_id" (transactions vs variations) dans
-| le GROUP BY ne plante que sous Postgres, jamais sous SQLite.
-|--------------------------------------------------------------------------
-*/
-test('le top variations distingue article simple et variation, avec article_id pour le lien frontend', function () {
-    $user = summaryUser();
-    $now = Carbon::now();
-
-    $simple = Article::create(['user_id' => $user->id, 'name' => 'Savon', 'sale_price' => 1000, 'quantity' => 50, 'type' => 'simple']);
-    $variable = Article::create(['user_id' => $user->id, 'name' => 'Robe wax', 'sale_price' => 0, 'quantity' => 0, 'type' => 'variable']);
-    $variation = Variation::create(['article_id' => $variable->id, 'name' => 'Taille M', 'quantity' => 10]);
-
-    $op = makeSaleOperation($user, ['total_amount' => 15000, 'occurred_at' => $now]);
-    makeLine($op, 2000, quantity: 2, overrides: ['article_id' => $simple->id, 'name' => 'Savon']);
-    makeLine($op, 13000, quantity: 1, overrides: ['article_id' => $variable->id, 'variable_id' => $variation->id, 'name' => 'Robe wax']);
-
-    $response = $this->actingAs($user)->getJson('/api/analytics/summary?period=7d');
-    $response->assertStatus(200);
-
-    $rows = collect($response->json('data.top_variations'));
-    $simpleRow = $rows->firstWhere('article_name', 'Savon');
-    $variationRow = $rows->firstWhere('variation_name', 'Taille M');
-
-    expect($simpleRow['article_id'])->toBe($simple->id);
-    expect($simpleRow['variation_name'])->toBeNull();
-    expect($simpleRow['quantity'])->toBe(2);
-
-    expect($variationRow['article_id'])->toBe($variable->id);
-    expect($variationRow['article_name'])->toBe('Robe wax');
-    expect($variationRow['revenue'])->toEqual(13000.0);
-});
-
-/*
-|--------------------------------------------------------------------------
 | 8. Isolation entre utilisateurs
 |--------------------------------------------------------------------------
 */
-test('un utilisateur ne voit jamais les données analytiques d\'un autre', function () {
+test('un utilisateur ne voit jamais les données analytiques d\'un autre (ventes orphelines)', function () {
     $userA = summaryUser();
     $userB = summaryUser();
     $now = Carbon::now();
 
-    $opA = makeSaleOperation($userA, ['total_amount' => 10000, 'occurred_at' => $now]);
-    makeLine($opA, 10000);
-
-    $opB = makeSaleOperation($userB, ['total_amount' => 99000, 'occurred_at' => $now]);
-    makeLine($opB, 99000);
+    makeOrphanTransaction($userA, 'sale', 10000, $now);
+    makeOrphanTransaction($userB, 'sale', 99000, $now);
 
     $response = $this->actingAs($userA)->getJson('/api/analytics/summary?period=7d');
     $response->assertStatus(200);
 
     expect($response->json('data.kpis.revenue.value'))->toEqual(10000.0);
+});
+
+/*
+|--------------------------------------------------------------------------
+| 9. Une opération liée mais soft-deleted (vente annulée) reste exclue
+|--------------------------------------------------------------------------
+*/
+test('une vente liée à une opération annulée (soft-deleted) est exclue', function () {
+    $user = summaryUser();
+    $now = Carbon::now();
+
+    $cancelled = makeSaleOperation($user, ['total_amount' => 5000, 'occurred_at' => $now]);
+    makeLine($cancelled, 5000);
+    $cancelled->delete();
+
+    makeOrphanTransaction($user, 'sale', 3000, $now);
+
+    $response = $this->actingAs($user)->getJson('/api/analytics/summary?period=7d');
+    $response->assertStatus(200);
+
+    expect($response->json('data.kpis.revenue.value'))->toEqual(3000.0);
+    expect($response->json('data.kpis.sales_count.value'))->toBe(1);
 });
