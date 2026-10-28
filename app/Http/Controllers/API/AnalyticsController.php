@@ -15,6 +15,44 @@ use Carbon\Carbon;
 class AnalyticsController extends Controller
 {
     /**
+     * Chantier "stats-paiements" : un seul endpoint pour les 5 blocs de la
+     * page Analyses (kpis, répartition par moyen de paiement, heatmap
+     * d'affluence, top variations, trésorerie) — voir AnalyticsSummaryService
+     * pour la justification de ce choix (cohérence des bornes de période
+     * entre les blocs, un seul aller-retour réseau).
+     */
+    public function summary(Request $request): JsonResponse
+    {
+        $period = $request->input('period', '30d');
+
+        if (!in_array($period, ['today', '7d', '30d', '12m'], true)) {
+            return response()->json([
+                'success' => false,
+                'message' => "Période invalide : {$period}",
+            ], 422);
+        }
+
+        try {
+            $cacheKey = 'analytics_summary:' . Auth::id() . ':' . $period;
+
+            $data = \Illuminate\Support\Facades\Cache::remember($cacheKey, 60, function () use ($period) {
+                return (new \App\Services\AnalyticsSummaryService())->summary(Auth::id(), $period);
+            });
+
+            return response()->json([
+                'success' => true,
+                'data' => $data,
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Erreur lors de la récupération des statistiques',
+                'error' => $e->getMessage(),
+            ], 500);
+        }
+    }
+
+    /**
      * Get overview statistics (revenu net, total ventes, total dépenses) for a period
      */
     public function overview(Request $request): JsonResponse
