@@ -130,8 +130,11 @@ class UserProfileController extends Controller
                 ], 400);
             }
 
-            // Mettre à jour le mot de passe
+            // Mettre à jour le mot de passe — et lever must_change_password
+            // si c'était un code à 6 chiffres imposé (voir chantier
+            // "Équipe" : création de membre / réinitialisation de code).
             $user->password = Hash::make($request->new_password);
+            $user->must_change_password = false;
             $user->save();
 
             return response()->json([

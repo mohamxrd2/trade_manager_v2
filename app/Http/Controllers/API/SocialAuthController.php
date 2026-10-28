@@ -87,6 +87,10 @@ class SocialAuthController extends Controller
 
             return redirect($frontendUrl . '/auth/callback');
         } catch (\Exception $e) {
+            if ($e->getMessage() === 'member_social_login_blocked') {
+                return redirect($frontendUrl . '/login?error=member_social_login_blocked');
+            }
+
             Log::error('Erreur de connexion sociale', [
                 'provider' => $provider,
                 'error' => $e->getMessage(),
@@ -144,6 +148,13 @@ class SocialAuthController extends Controller
                 'data' => ['user' => $user],
             ]);
         } catch (\Throwable $e) {
+            if ($e->getMessage() === 'member_social_login_blocked') {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Les comptes membres d\'une équipe ne peuvent pas se connecter via Google ou Facebook. Utilisez votre identifiant et votre code.',
+                ], 403);
+            }
+
             Log::error('Erreur d\'échange de code OAuth', [
                 'provider' => $provider,
                 'error' => $e->getMessage(),
@@ -167,6 +178,13 @@ class SocialAuthController extends Controller
         }
 
         $user = User::where('email', $socialUser->getEmail())->first();
+
+        // Un membre se connecte UNIQUEMENT via identifiant+code (voir
+        // AuthController::login()) — jamais via Google/Facebook, même si son
+        // email (optionnel) correspond par coïncidence à un compte social.
+        if ($user && $user->isMember()) {
+            throw new \RuntimeException('member_social_login_blocked');
+        }
 
         if ($user) {
             // Lier le compte au provider s'il n'était pas déjà lié

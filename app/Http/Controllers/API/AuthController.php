@@ -8,6 +8,7 @@ use App\Mail\RegistrationVerificationCode;
 use App\Models\Company;
 use App\Models\User;
 use App\Models\UserSetting;
+use App\Support\ActivityLogger;
 use App\Support\CurrentAccount;
 use App\Support\Permissions;
 use Illuminate\Http\JsonResponse;
@@ -17,6 +18,7 @@ use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Mail;
+use Illuminate\Support\Facades\RateLimiter;
 
 class AuthController extends Controller
 {
@@ -288,9 +290,25 @@ class AuthController extends Controller
             return response()->json(['message' => 'Email, username ou login requis'], 422);
         }
         
+        // Chantier "Équipe" — 5 tentatives par identifiant+IP sur 15 minutes
+        // avant verrouillage temporaire, qu'il s'agisse d'un propriétaire
+        // (email) ou d'un membre (identifiant). Clé composite pour qu'un
+        // attaquant changeant d'IP ne contourne pas la limite sur un
+        // identifiant donné, et inversement.
+        $rateLimitKey = 'login:' . strtolower($loginField) . '|' . $request->ip();
+
+        if (RateLimiter::tooManyAttempts($rateLimitKey, 5)) {
+            return response()->json([
+                'success' => false,
+                'code' => 'TOO_MANY_ATTEMPTS',
+                'message' => 'Trop de tentatives de connexion. Réessayez dans quelques minutes.',
+                'retry_after' => RateLimiter::availableIn($rateLimitKey),
+            ], 429);
+        }
+
         // Vérifier si c'est un email ou un username
         $isEmail = filter_var($loginField, FILTER_VALIDATE_EMAIL);
-        
+
         // Rechercher l'utilisateur par email ou username
         $user = null;
         if ($isEmail) {
@@ -301,12 +319,34 @@ class AuthController extends Controller
 
         // Vérifier si l'utilisateur existe et si le mot de passe est correct
         if (!$user || !Hash::check($password, $user->password)) {
+            // Décompte des 15 minutes posé au PREMIER échec seulement (Laravel
+            // ne le ré-étend pas tant qu'il n'a pas expiré) — message
+            // volontairement générique, jamais "email inconnu" vs "mot de
+            // passe incorrect" (évite de révéler quels identifiants existent).
+            RateLimiter::hit($rateLimitKey, 900);
+
             return response()->json(['message' => 'Identifiants invalides'], 401);
         }
 
-        // Email non vérifié (compte créé avant cette fonctionnalité, ou
-        // jamais vérifié) : on bloque la connexion et on renvoie un code.
-        if (!$user->email_verified_at) {
+        RateLimiter::clear($rateLimitKey);
+
+        // Un membre suspendu est refusé IMMÉDIATEMENT, avant toute autre
+        // vérification — jamais de message différent selon la raison
+        // (sécurité : ne pas confirmer/infirmer l'existence du compte).
+        if ($user->isMember() && $user->status === 'suspended') {
+            return response()->json([
+                'success' => false,
+                'code' => 'ACCOUNT_SUSPENDED',
+                'message' => 'Votre accès a été suspendu. Contactez le responsable.',
+            ], 403);
+        }
+
+        // La vérification d'email ne concerne JAMAIS un membre (identifiant =
+        // username, pas email — un membre peut même n'avoir aucun email) —
+        // voir TeamMemberController::store() qui pose déjà
+        // email_verified_at=now() à la création, cette garde est une
+        // seconde ligne de défense explicite.
+        if ($user->isOwner() && !$user->email_verified_at) {
             $code = $this->generateCode();
 
             Cache::put($this->pendingRegistrationKey(strtolower($user->email)), [
@@ -342,6 +382,12 @@ class AuthController extends Controller
 
         // Régénération de la session pour la sécurité
         $request->session()->regenerate();
+
+        $user->forceFill(['last_login_at' => now()])->save();
+
+        if ($user->isMember()) {
+            ActivityLogger::log($user->id, 'team.member_login');
+        }
 
         // Retourner directement l'utilisateur (format simplifié)
         return response()->json($user);

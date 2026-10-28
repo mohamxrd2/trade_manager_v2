@@ -12,6 +12,7 @@ use App\Http\Controllers\API\NotificationController;
 use App\Http\Controllers\API\OnboardingController;
 use App\Http\Controllers\API\OperationController;
 use App\Http\Controllers\API\SocialAuthController;
+use App\Http\Controllers\API\TeamMemberController;
 use App\Http\Controllers\API\TransactionController;
 use App\Http\Controllers\API\UserProfileController;
 use App\Http\Controllers\API\UserSettingController;
@@ -100,7 +101,19 @@ Route::middleware(['auth:sanctum', 'active_member', 'must_change_password'])->gr
     
     // User profile routes
     Route::put('/user/profile', [UserProfileController::class, 'updateProfile']);
-    Route::put('/user/password', [UserProfileController::class, 'updatePassword']);
+    Route::put('/user/password', [UserProfileController::class, 'updatePassword'])->name('team.change-password');
+
+    // =========================================================================
+    // ÉQUIPE — gestion des MEMBRES (accès applicatif, distinct des associés)
+    // =========================================================================
+    Route::middleware('permission:' . \App\Support\Permissions::TEAM_MANAGE)->group(function () {
+        Route::get('/team/members', [TeamMemberController::class, 'index']);
+        Route::post('/team/members', [TeamMemberController::class, 'store']);
+        Route::put('/team/members/{id}', [TeamMemberController::class, 'update']);
+        Route::post('/team/members/{id}/suspend', [TeamMemberController::class, 'suspend']);
+        Route::post('/team/members/{id}/reactivate', [TeamMemberController::class, 'reactivate']);
+        Route::post('/team/members/{id}/reset-code', [TeamMemberController::class, 'resetCode']);
+    });
     
     // Onboarding routes (legacy)
     Route::get('/onboarding/check', [OnboardingController::class, 'check']);
