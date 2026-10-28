@@ -18,8 +18,10 @@ class Collaborator extends Model
      */
     protected $fillable = [
         'user_id',
+        'user_id_member',
         'name',
         'phone',
+        'email',
         'part',
         'image',
     ];
@@ -48,6 +50,16 @@ class Collaborator extends Model
     public function user(): BelongsTo
     {
         return $this->belongsTo(User::class);
+    }
+
+    /**
+     * Le compte d'accès lié à CET associé, s'il en a un (chantier "Équipe"
+     * étape 2 — un associé peut AUSSI être membre, les deux notions sont
+     * indépendantes). Null si l'associé n'a aucun accès applicatif.
+     */
+    public function member(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'user_id_member');
     }
 
     /**

@@ -343,7 +343,7 @@ class AuthController extends Controller
 
         // La vérification d'email ne concerne JAMAIS un membre (identifiant =
         // username, pas email — un membre peut même n'avoir aucun email) —
-        // voir TeamMemberController::store() qui pose déjà
+        // voir TeamService::createMemberAccount() qui pose déjà
         // email_verified_at=now() à la création, cette garde est une
         // seconde ligne de défense explicite.
         if ($user->isOwner() && !$user->email_verified_at) {
@@ -426,18 +426,75 @@ class AuthController extends Controller
         $user->setRelation('settings', UserSetting::where('user_id', CurrentAccount::id())->first());
 
         $payload = $user->toArray();
+        $payload['is_owner'] = $user->isOwner();
+        $payload['permissions'] = Permissions::effectivePermissions($user);
 
         // Un membre sans wallet.view_balance (ex. caissier) ne doit jamais
-        // voir la position financière GLOBALE du compte — à la place
-        // l'étape 2 affichera "la caisse du jour" ; ici on masque seulement,
-        // on ne remplace pas encore. Le propriétaire et tout membre ayant la
-        // permission (manager, accountant) gardent ces champs inchangés.
+        // voir la position financière GLOBALE du compte — à la place, SA
+        // caisse du jour (chantier "Équipe" étape 2 — voir myDay()). Le
+        // propriétaire et tout membre ayant la permission (manager,
+        // comptable) gardent les champs financiers globaux inchangés et
+        // n'ont pas besoin de my_day (toujours null pour eux).
         if (!Permissions::userHas($user, Permissions::WALLET_VIEW_BALANCE)) {
             foreach (self::HIDDEN_FINANCIAL_FIELDS as $field) {
                 unset($payload[$field]);
             }
+            $payload['my_day'] = $this->myDay($user);
+        } else {
+            $payload['my_day'] = null;
         }
 
         return response()->json($payload);
+    }
+
+    /**
+     * "Caisse du jour" d'UN membre — ses propres ventes d'aujourd'hui
+     * (heure d'Abidjan), remplace les champs financiers globaux masqués
+     * ci-dessus pour qui n'a pas wallet.view_balance.
+     */
+    private function myDay(User $user): array
+    {
+        $timezone = 'Africa/Abidjan';
+        $start = \Illuminate\Support\Carbon::now($timezone)->startOfDay();
+        $end = \Illuminate\Support\Carbon::now($timezone)->endOfDay();
+
+        $query = fn () => \App\Models\Operation::where('user_id', CurrentAccount::id())
+            ->where('created_by_user_id', $user->id)
+            ->where('type', 'sale')
+            ->whereBetween('occurred_at', [$start, $end]);
+
+        $salesCount = $query()->count();
+        $total = (float) $query()->sum('total_amount');
+
+        $byPaymentMethod = $query()
+            ->selectRaw("COALESCE(payment_method, 'non_precise') as payment_method, SUM(total_amount) as amount, COUNT(*) as count")
+            ->groupBy('payment_method')
+            ->get()
+            ->map(fn ($row) => [
+                'payment_method' => $row->payment_method,
+                'amount' => round((float) $row->amount, 2),
+                'count' => (int) $row->count,
+            ])
+            ->values();
+
+        $lastSales = $query()
+            ->orderByDesc('occurred_at')
+            ->limit(5)
+            ->get(['id', 'code', 'total_amount', 'payment_method', 'occurred_at'])
+            ->map(fn ($operation) => [
+                'id' => $operation->id,
+                'code' => $operation->code,
+                'total_amount' => (float) $operation->total_amount,
+                'payment_method' => $operation->payment_method,
+                'occurred_at' => $operation->occurred_at,
+            ])
+            ->values();
+
+        return [
+            'sales_count' => $salesCount,
+            'total' => round($total, 2),
+            'by_payment_method' => $byPaymentMethod,
+            'last_sales' => $lastSales,
+        ];
     }
 }

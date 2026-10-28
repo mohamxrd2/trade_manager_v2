@@ -8,11 +8,12 @@ use App\Http\Controllers\API\CollaboratorController;
 use App\Http\Controllers\API\CompanyController;
 use App\Http\Controllers\API\HealthController;
 use App\Http\Controllers\API\InvoiceController;
+use App\Http\Controllers\API\MeController;
 use App\Http\Controllers\API\NotificationController;
 use App\Http\Controllers\API\OnboardingController;
 use App\Http\Controllers\API\OperationController;
 use App\Http\Controllers\API\SocialAuthController;
-use App\Http\Controllers\API\TeamMemberController;
+use App\Http\Controllers\API\TeamController;
 use App\Http\Controllers\API\TransactionController;
 use App\Http\Controllers\API\UserProfileController;
 use App\Http\Controllers\API\UserSettingController;
@@ -101,18 +102,29 @@ Route::middleware(['auth:sanctum', 'active_member', 'must_change_password'])->gr
     
     // User profile routes
     Route::put('/user/profile', [UserProfileController::class, 'updateProfile']);
-    Route::put('/user/password', [UserProfileController::class, 'updatePassword'])->name('team.change-password');
+    Route::put('/user/password', [UserProfileController::class, 'updatePassword']);
 
     // =========================================================================
-    // ÉQUIPE — gestion des MEMBRES (accès applicatif, distinct des associés)
+    // MOI — libre-service pour l'utilisateur connecté (propriétaire ou membre)
+    // =========================================================================
+    Route::post('/me/change-code', [UserProfileController::class, 'updatePassword'])->name('team.change-password');
+    Route::get('/me/permissions', [MeController::class, 'permissions']);
+
+    // =========================================================================
+    // ÉQUIPE — associés ET membres unifiés (chantier "Équipe" étape 2) —
+    // /api/collaborators reste disponible par ailleurs pour compatibilité.
     // =========================================================================
     Route::middleware('permission:' . \App\Support\Permissions::TEAM_MANAGE)->group(function () {
-        Route::get('/team/members', [TeamMemberController::class, 'index']);
-        Route::post('/team/members', [TeamMemberController::class, 'store']);
-        Route::put('/team/members/{id}', [TeamMemberController::class, 'update']);
-        Route::post('/team/members/{id}/suspend', [TeamMemberController::class, 'suspend']);
-        Route::post('/team/members/{id}/reactivate', [TeamMemberController::class, 'reactivate']);
-        Route::post('/team/members/{id}/reset-code', [TeamMemberController::class, 'resetCode']);
+        Route::get('/team', [TeamController::class, 'index']);
+        Route::post('/team', [TeamController::class, 'store']);
+        Route::patch('/team/{id}', [TeamController::class, 'update']);
+        Route::post('/team/{id}/access', [TeamController::class, 'grantAccess']);
+        Route::post('/team/{id}/suspend', [TeamController::class, 'suspend']);
+        Route::post('/team/{id}/reactivate', [TeamController::class, 'reactivate']);
+        Route::post('/team/{id}/reset-code', [TeamController::class, 'resetCode']);
+        Route::delete('/team/{id}', [TeamController::class, 'destroy']);
+        Route::get('/team/roles', [TeamController::class, 'roles']);
+        Route::get('/team/activity', [TeamController::class, 'activity']);
     });
     
     // Onboarding routes (legacy)

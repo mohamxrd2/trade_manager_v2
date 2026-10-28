@@ -85,7 +85,11 @@ class Operation extends Model
      */
     public function getAuthorNameAttribute(): ?string
     {
-        $author = $this->createdBy ?: $this->user;
+        // getRelationValue() (jamais $this->createdBy) : Str::studly()
+        // traite "createdBy" et "created_by" de façon identique, donc
+        // getCreatedByAttribute() ci-dessous intercepterait sinon aussi
+        // cet accès par __get().
+        $author = $this->getRelationValue('createdBy') ?: $this->getRelationValue('user');
         if (!$author) {
             return null;
         }
@@ -93,5 +97,32 @@ class Operation extends Model
         $name = trim(($author->first_name ?? '') . ' ' . ($author->last_name ?? ''));
 
         return $name !== '' ? $name : ($author->username ?? null);
+    }
+
+    /**
+     * Chantier "Équipe" étape 2 — { id, name, role } de l'auteur réel,
+     * exposé sur chaque opération (index ET show/store, contrairement à
+     * `author_name` qui ne l'est que sur une opération seule — voir
+     * OperationController::loadOperationForResponse()/index()). Utilise
+     * `getRelationValue()` et non `$this->createdBy` pour éviter de
+     * réinvoquer CET accesseur (même nom en snake_case que la relation en
+     * camelCase : `created_by` vs `createdBy`, pas de collision, mais
+     * `$this->createdBy` ré-entrerait par __get() — getRelationValue()
+     * résout directement la relation sans repasser par les accesseurs).
+     */
+    public function getCreatedByAttribute(): ?array
+    {
+        $author = $this->getRelationValue('createdBy') ?: $this->getRelationValue('user');
+        if (!$author) {
+            return null;
+        }
+
+        $name = trim(($author->first_name ?? '') . ' ' . ($author->last_name ?? ''));
+
+        return [
+            'id' => $author->id,
+            'name' => $name !== '' ? $name : ($author->username ?? null),
+            'role' => $author->isOwner() ? 'owner' : $author->role,
+        ];
     }
 }

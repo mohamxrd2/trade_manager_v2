@@ -75,7 +75,7 @@ class OperationController extends Controller
 
         // "Caissier : {nom}" sur le ticket de caisse — voir le commentaire de
         // l'accesseur sur le modèle pour pourquoi ce n'est pas dans $appends.
-        $operation->append('author_name');
+        $operation->append(['author_name', 'created_by']);
         $operation->makeHidden(['createdBy', 'user']);
 
         return $operation;
@@ -292,6 +292,7 @@ class OperationController extends Controller
             'to' => 'nullable|date_format:Y-m-d',
             'page' => 'nullable|integer|min:1',
             'per_page' => 'nullable|integer|min:1|max:100',
+            'created_by' => 'nullable|string',
         ]);
 
         if ($validator->fails()) {
@@ -318,6 +319,13 @@ class OperationController extends Controller
             // ventes du caissier B).
             if (!$canViewAll) {
                 $query->where('created_by_user_id', CurrentAccount::actorId());
+            } elseif ($request->filled('created_by')) {
+                // created_by=... n'a de sens QUE pour qui peut voir toute
+                // l'équipe (sales.view_all) — un membre restreint à ses
+                // propres ventes est déjà filtré ci-dessus, le paramètre
+                // serait sinon un moyen détourné de voir les ventes d'un
+                // autre membre.
+                $query->where('created_by_user_id', $request->input('created_by'));
             }
 
             if ($request->filled('type')) {
@@ -353,14 +361,24 @@ class OperationController extends Controller
 
             $total = (clone $query)->count();
 
+            // Pas de restriction de colonnes sur 'createdBy' (ex.
+            // 'createdBy:id,...') : certains fichiers de test (schéma
+            // minimal, voir tests/Feature/*.php) n'ont pas encore les
+            // colonnes account_id/role sur `users`, ce qui ferait échouer
+            // la requête d'eager-load sur Postgres (strict sur les
+            // colonnes sélectionnées, contrairement à SQLite). Sans
+            // conséquence : la relation est entièrement masquée ci-dessous
+            // (makeHidden), seul l'accesseur created_by (léger) est exposé.
+            $eagerLoad = ['transactions.article', 'transactions.variation', 'createdBy'];
+
             $paginationRequested = $request->filled('page') || $request->filled('per_page');
             if ($paginationRequested) {
                 $page = max(1, (int) $request->input('page', 1));
                 $perPage = max(1, (int) $request->input('per_page', 20));
-                $operations = $query->with(['transactions.article', 'transactions.variation'])
+                $operations = $query->with($eagerLoad)
                     ->forPage($page, $perPage)->get();
             } else {
-                $operations = $query->with(['transactions.article', 'transactions.variation'])->get();
+                $operations = $query->with($eagerLoad)->get();
                 $page = 1;
                 $perPage = max($total, 1);
             }
@@ -370,6 +388,8 @@ class OperationController extends Controller
                     $transaction->article?->makeHidden('user');
                     $transaction->variation?->makeHidden('article');
                 });
+                $operation->append('created_by');
+                $operation->makeHidden('createdBy');
             });
 
             return response()->json([

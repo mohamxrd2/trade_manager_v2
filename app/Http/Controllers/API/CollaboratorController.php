@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Models\Collaborator;
 use App\Models\User;
 use App\Services\NotificationService;
+use App\Services\TeamService;
 use App\Support\CurrentAccount;
 use App\Support\Permissions;
 use Illuminate\Http\JsonResponse;
@@ -95,10 +96,7 @@ class CollaboratorController extends Controller
                 // ajusté — voir variations:resync pour corriger un tel
                 // décalage existant). Ici il n'y a pas d'"autre" à exclure
                 // puisque c'est une création.
-                $sumOtherParts = (string) Collaborator::where('user_id', $user->id)->sum('part');
-                $projectedTotal = bcadd($sumOtherParts, (string) $request->part, 2);
-
-                if (bccomp($projectedTotal, '100', 2) > 0) {
+                if (!TeamService::shareFits($user->id, (string) $request->part)) {
                     return response()->json([
                         'success' => false,
                         'message' => 'Le total des parts dépasse 100 %',
@@ -244,12 +242,7 @@ class CollaboratorController extends Controller
                     // collaborateurs (celui qu'on modifie est exclu de la
                     // somme, sa nouvelle valeur est ajoutée ensuite) — jamais
                     // sur company_share, qui peut être décalé.
-                    $sumOtherParts = (string) Collaborator::where('user_id', CurrentAccount::id())
-                        ->where('id', '!=', $id)
-                        ->sum('part');
-                    $projectedTotal = bcadd($sumOtherParts, (string) $request->part, 2);
-
-                    if (bccomp($projectedTotal, '100', 2) > 0) {
+                    if (!TeamService::shareFits(CurrentAccount::id(), (string) $request->part, $id)) {
                         return response()->json([
                             'success' => false,
                             'message' => 'Le total des parts dépasse 100 %',

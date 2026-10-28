@@ -560,7 +560,7 @@ test('cashier : 403 sur team.manage et settings.manage', function () {
     $owner = equipeOwner('C');
     $cashier = equipeMember($owner, 'cashier');
 
-    $this->actingAs($cashier)->getJson('/api/team/members')->assertStatus(403);
+    $this->actingAs($cashier)->getJson('/api/team')->assertStatus(403);
     $this->actingAs($cashier)->getJson('/api/user/settings')->assertStatus(403);
 });
 
@@ -675,7 +675,7 @@ test('un membre must_change_password=true est bloqué partout sauf changer son c
         ->assertStatus(403)
         ->assertJsonPath('code', 'MUST_CHANGE_PASSWORD');
 
-    $this->actingAs($member)->putJson('/api/user/password', [
+    $this->actingAs($member)->postJson('/api/me/change-code', [
         'current_password' => '111111',
         'new_password' => 'un-mot-de-passe-plus-long',
         'new_password_confirmation' => 'un-mot-de-passe-plus-long',
@@ -727,7 +727,7 @@ test('suspendre un membre révoque immédiatement ses sessions actives', functio
 
     expect(DB::table('sessions')->where('user_id', $member->id)->count())->toBe(1);
 
-    $this->actingAs($owner)->postJson("/api/team/members/{$member->id}/suspend")->assertOk();
+    $this->actingAs($owner)->postJson("/api/team/{$member->id}/suspend")->assertOk();
 
     expect(DB::table('sessions')->where('user_id', $member->id)->count())->toBe(0);
     expect($member->fresh()->status)->toBe('suspended');
@@ -744,7 +744,7 @@ test('réinitialiser le code d’un membre révoque ses sessions et impose must_
         'last_activity' => time(),
     ]);
 
-    $response = $this->actingAs($owner)->postJson("/api/team/members/{$member->id}/reset-code");
+    $response = $this->actingAs($owner)->postJson("/api/team/{$member->id}/reset-code");
 
     $response->assertOk();
     expect($response->json('data.login_code'))->toMatch('/^\d{6}$/');
@@ -763,7 +763,7 @@ test('changer le rôle d’un membre révoque ses sessions', function () {
         'last_activity' => time(),
     ]);
 
-    $this->actingAs($owner)->putJson("/api/team/members/{$member->id}", ['role' => 'stock_manager'])->assertOk();
+    $this->actingAs($owner)->patchJson("/api/team/{$member->id}", ['role' => 'stock_manager'])->assertOk();
 
     expect(DB::table('sessions')->where('user_id', $member->id)->count())->toBe(0);
     expect($member->fresh()->role)->toBe('stock_manager');
@@ -772,15 +772,15 @@ test('changer le rôle d’un membre révoque ses sessions', function () {
 test('création de membre : username {CODE}-{PRENOM} unique, code à 6 chiffres, must_change_password=true', function () {
     $owner = equipeOwner('D');
 
-    $response = $this->actingAs($owner)->postJson('/api/team/members', [
-        'first_name' => 'Koffi',
-        'last_name' => 'Yao',
+    $response = $this->actingAs($owner)->postJson('/api/team', [
+        'name' => 'Koffi Yao',
+        'has_access' => true,
         'role' => 'cashier',
     ]);
 
     $response->assertStatus(201);
-    $username = $response->json('data.member.username');
-    $code = $response->json('data.login_code');
+    $username = $response->json('data.credentials.username');
+    $code = $response->json('data.credentials.code');
 
     expect($username)->toContain('-KOFFI');
     expect($code)->toMatch('/^\d{6}$/');

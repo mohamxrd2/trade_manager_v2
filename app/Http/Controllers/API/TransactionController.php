@@ -154,6 +154,7 @@ class TransactionController extends Controller
             'date_to' => 'nullable|date_format:Y-m-d',
             'page' => 'nullable|integer|min:1',
             'per_page' => 'nullable|integer|min:1|max:100',
+            'created_by' => 'nullable|string',
         ]);
 
         if ($validator->fails()) {
@@ -184,6 +185,13 @@ class TransactionController extends Controller
                     // membre — jamais celles d'un autre membre du compte.
                     $q->whereHas('operation', function ($opQuery) {
                         $opQuery->where('created_by_user_id', CurrentAccount::actorId());
+                    });
+                })
+                ->when($canViewAll && $request->filled('created_by'), function ($q) use ($request) {
+                    // created_by=... n'a de sens que pour qui peut voir toute
+                    // l'équipe (sales.view_all) — voir OperationController::index().
+                    $q->whereHas('operation', function ($opQuery) use ($request) {
+                        $opQuery->where('created_by_user_id', $request->input('created_by'));
                     });
                 })
                 ->with([

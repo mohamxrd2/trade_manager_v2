@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Models\User;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
 
@@ -47,6 +48,7 @@ class AnalyticsSummaryService
         $heatmap = $this->heatmap($userId, $start, $end);
         $topVariations = $this->topVariations($userId, $start, $end);
         $treasury = $this->treasury($userId, $start, $end);
+        $byMember = $this->byMember($userId, $start, $end);
 
         $paymentMethodsTotal = array_sum(array_column($paymentMethods['rows'], 'amount'));
 
@@ -59,6 +61,7 @@ class AnalyticsSummaryService
             'heatmap' => $heatmap,
             'top_variations' => $topVariations,
             'treasury' => $treasury,
+            'by_member' => $byMember,
             // Vérification de cohérence exposée dans la réponse — permet de
             // détecter immédiatement une future divergence entre les deux
             // sources (ex. un futur changement qui recasserait l'une des deux
@@ -379,6 +382,45 @@ class AnalyticsSummaryService
             'withdrawals' => round($withdrawals, 2),
             'balance' => round($this->balanceAsOf($userId, $end), 2),
         ];
+    }
+
+    // --- Répartition par membre ---------------------------------------------
+
+    /**
+     * Chantier "Équipe" étape 2 — montant, nombre de ventes et panier moyen
+     * PAR membre de l'équipe (gated par analytics.view au contrôleur).
+     * `COALESCE(operations.created_by_user_id, transactions.user_id)` :
+     * une ligne orpheline sans opération (avant backfill) ou sans auteur
+     * connu est attribuée au PROPRIÉTAIRE du compte, jamais ignorée.
+     */
+    private function byMember(string $userId, Carbon $start, Carbon $end): array
+    {
+        $rows = $this->baseQuery($userId, 'sale', $start, $end)
+            ->selectRaw('
+                COALESCE(operations.created_by_user_id, transactions.user_id) as member_id,
+                SUM(transactions.amount) as amount,
+                COUNT(DISTINCT COALESCE(transactions.operation_id, transactions.id)) as sales_count
+            ')
+            ->groupByRaw('COALESCE(operations.created_by_user_id, transactions.user_id)')
+            ->get();
+
+        $memberIds = $rows->pluck('member_id')->filter()->unique()->values()->all();
+        $users = User::whereIn('id', $memberIds)->get(['id', 'first_name', 'last_name', 'username'])->keyBy('id');
+
+        return $rows->map(function ($row) use ($users) {
+            $user = $users->get($row->member_id);
+            $name = $user ? trim(($user->first_name ?? '') . ' ' . ($user->last_name ?? '')) : null;
+            $amount = (float) $row->amount;
+            $salesCount = (int) $row->sales_count;
+
+            return [
+                'user_id' => $row->member_id,
+                'name' => ($name !== null && $name !== '') ? $name : ($user->username ?? null),
+                'amount' => round($amount, 2),
+                'sales_count' => $salesCount,
+                'average_basket' => $salesCount > 0 ? round($amount / $salesCount, 2) : 0.0,
+            ];
+        })->sortByDesc('amount')->values()->all();
     }
 
     private function balanceAsOf(string $userId, Carbon $end): float
