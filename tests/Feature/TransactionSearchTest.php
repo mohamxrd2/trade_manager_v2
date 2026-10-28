@@ -398,6 +398,27 @@ test('un "%" dans q ne casse pas la requête', function () {
     // littéral échappé, pas comme un joker LIKE incontrôlé.
 });
 
+test('le filtre payment_method ne renvoie que les transactions de ce moyen de paiement, "non_precise" = NULL', function () {
+    $user = makeSearchTestUser();
+
+    $wave = Transaction::create(['user_id' => $user->id, 'type' => 'sale', 'name' => 'Vente wave', 'amount' => 5000, 'payment_method' => 'wave']);
+    Transaction::create(['user_id' => $user->id, 'type' => 'sale', 'name' => 'Vente especes', 'amount' => 3000, 'payment_method' => 'especes']);
+    $noMethod = Transaction::create(['user_id' => $user->id, 'type' => 'sale', 'name' => 'Ancienne vente', 'amount' => 2000, 'payment_method' => null]);
+
+    $byWave = $this->actingAs($user)->getJson('/api/transactions?payment_method=wave');
+    $byWave->assertStatus(200);
+    expect($byWave->json('meta.total'))->toBe(1);
+    expect($byWave->json('data.0.id'))->toBe($wave->id);
+
+    $byUnspecified = $this->actingAs($user)->getJson('/api/transactions?payment_method=non_precise');
+    $byUnspecified->assertStatus(200);
+    expect($byUnspecified->json('meta.total'))->toBe(1);
+    expect($byUnspecified->json('data.0.id'))->toBe($noMethod->id);
+
+    $invalid = $this->actingAs($user)->getJson('/api/transactions?payment_method=bitcoin');
+    $invalid->assertStatus(422);
+});
+
 test('les transactions d\'un autre utilisateur ne sont jamais renvoyées', function () {
     $user = makeSearchTestUser();
     $otherUser = makeSearchTestUser();

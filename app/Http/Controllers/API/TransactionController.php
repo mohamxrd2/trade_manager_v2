@@ -146,6 +146,7 @@ class TransactionController extends Controller
         $validator = Validator::make($request->all(), [
             'q' => 'nullable|string|max:100',
             'type' => 'nullable|in:sale,expense,apport,retrait',
+            'payment_method' => 'nullable|in:especes,orange_money,moov_money,wave,mtn_money,virement,autre,non_precise',
             'date_from' => 'nullable|date_format:Y-m-d',
             'date_to' => 'nullable|date_format:Y-m-d',
             'page' => 'nullable|integer|min:1',
@@ -186,6 +187,17 @@ class TransactionController extends Controller
 
             if ($request->filled('type')) {
                 $query->where('type', $request->input('type'));
+            }
+
+            if ($request->filled('payment_method')) {
+                // 'non_precise' = aucun moyen de paiement enregistré (anciennes
+                // ventes, avant l'ajout de ce champ) — même convention que
+                // AnalyticsSummaryService (COALESCE(payment_method, 'non_precise')).
+                if ($request->input('payment_method') === 'non_precise') {
+                    $query->whereNull('payment_method');
+                } else {
+                    $query->where('payment_method', $request->input('payment_method'));
+                }
             }
 
             $timezone = 'Africa/Abidjan';
