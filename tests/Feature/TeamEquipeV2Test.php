@@ -757,3 +757,37 @@ test('created_by= filtre les opérations par membre pour qui a sales.view_all', 
     $response->assertOk();
     expect($response->getContent())->toContain('V-TEST-PB')->not->toContain('V-TEST-PA');
 });
+
+/*
+|--------------------------------------------------------------------------
+| 8. Email déjà utilisé — 422 propre, jamais un 500 (violation SQL brute)
+|--------------------------------------------------------------------------
+*/
+
+test('POST /api/team avec un email déjà utilisé renvoie 422, pas un 500', function () {
+    $owner = v2Owner('Q');
+    $other = v2Owner('Q2'); // un email qui existe déjà, sur un AUTRE compte
+
+    $response = $this->actingAs($owner)->postJson('/api/team', [
+        'name' => 'Koffi Doublon',
+        'email' => $other->email,
+        'has_access' => true,
+        'role' => 'cashier',
+    ]);
+
+    $response->assertStatus(422);
+    expect($response->json('errors.email.0'))->toBe('Cet email est déjà utilisé par un autre compte.');
+    expect(User::where('email', $other->email)->count())->toBe(1); // aucune ligne créée en double
+});
+
+test('PATCH /api/team/{id} avec l\'email d\'un AUTRE compte renvoie 422 ; garder son propre email ne casse rien', function () {
+    $owner = v2Owner('R');
+    $taken = v2Owner('R2');
+    $member = v2Member($owner, 'cashier');
+
+    $this->actingAs($owner)->patchJson("/api/team/{$member->id}", ['email' => $taken->email])
+        ->assertStatus(422);
+
+    $this->actingAs($owner)->patchJson("/api/team/{$member->id}", ['email' => $member->email])
+        ->assertOk();
+});

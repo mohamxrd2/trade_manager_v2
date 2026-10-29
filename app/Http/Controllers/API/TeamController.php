@@ -19,6 +19,7 @@ use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Str;
+use Illuminate\Validation\Rule;
 
 /**
  * Chantier "Équipe" étape 2 — endpoint UNIFIÉ qui gère à la fois les
@@ -91,7 +92,12 @@ class TeamController extends Controller
         $validator = Validator::make($request->all(), [
             'name' => 'required|string|max:255',
             'phone' => 'nullable|string|max:30',
-            'email' => 'nullable|email|max:255',
+            // unique:users,email SANS filtre de compte : la colonne est unique sur
+            // TOUTE la table (contrainte globale, un même email ne peut pas servir
+            // deux fois de login) — pas seulement au sein de ce compte. Sans cette
+            // règle, un email déjà pris remonte en 500 (violation de contrainte SQL
+            // brute) au lieu d'un 422 propre.
+            'email' => 'nullable|email|max:255|unique:users,email',
             'photo' => 'nullable|string|max:255',
             'is_partner' => 'sometimes|boolean',
             'share' => 'required_if:is_partner,true|nullable|numeric|min:0.01|max:99.99',
@@ -100,6 +106,12 @@ class TeamController extends Controller
             'permissions_overrides' => 'sometimes|array',
             'permissions_overrides.*.permission' => 'required_with:permissions_overrides|string|in:' . implode(',', Permissions::ALL),
             'permissions_overrides.*.granted' => 'required_with:permissions_overrides|boolean',
+        ], [
+            // Le reste des messages vient de Laravel (APP_LOCALE=en, tant que le
+            // backend n'a pas de lang/fr — tâche distincte) ; celui-ci est la
+            // seule règle ajoutée pour ce correctif, autant qu'il parle français
+            // comme tout le reste de ce contrôleur.
+            'email.unique' => 'Cet email est déjà utilisé par un autre compte.',
         ]);
 
         if ($validator->fails()) {
@@ -216,16 +228,27 @@ class TeamController extends Controller
         $accessUser = $resolved['user'];
         $collaborator = $resolved['collaborator'];
 
+        // unique:users,email seulement si cette personne a un accès (son email vit
+        // alors sur `users`, colonne unique globale) — un associé sans accès a son
+        // email sur `collaborators.email`, sans contrainte d'unicité. ->ignore()
+        // pour ne pas se rejeter lui-même quand l'email soumis n'a pas changé.
+        $emailRules = ['sometimes', 'nullable', 'email', 'max:255'];
+        if ($accessUser) {
+            $emailRules[] = Rule::unique('users', 'email')->ignore($accessUser->id);
+        }
+
         $validator = Validator::make($request->all(), [
             'name' => 'sometimes|string|max:255',
             'phone' => 'sometimes|nullable|string|max:30',
-            'email' => 'sometimes|nullable|email|max:255',
+            'email' => $emailRules,
             'photo' => 'sometimes|nullable|string|max:255',
             'share' => 'sometimes|numeric|min:0.01|max:99.99',
             'role' => 'sometimes|string|in:' . implode(',', array_diff(Permissions::ROLES, ['owner'])),
             'permissions_overrides' => 'sometimes|array',
             'permissions_overrides.*.permission' => 'required_with:permissions_overrides|string|in:' . implode(',', Permissions::ALL),
             'permissions_overrides.*.granted' => 'required_with:permissions_overrides|boolean',
+        ], [
+            'email.unique' => 'Cet email est déjà utilisé par un autre compte.',
         ]);
 
         if ($validator->fails()) {
@@ -330,6 +353,17 @@ class TeamController extends Controller
             return response()->json([
                 'success' => false,
                 'message' => 'Le nombre maximal de membres (' . config('team.max_members') . ') est atteint pour ce compte.',
+            ], 422);
+        }
+
+        // Même garde que store()/update() : l'email de cet associé (déjà en base,
+        // pas resaisi ici) va migrer sur `users.email` (unique globale) dès qu'il
+        // obtient un accès — sans ce contrôle, une collision remonte en 500.
+        if ($collaborator->email && User::where('email', $collaborator->email)->exists()) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Erreur de validation',
+                'errors' => ['email' => ["L'email {$collaborator->email} de cet associé est déjà utilisé par un autre compte"]],
             ], 422);
         }
 
