@@ -58,11 +58,41 @@ class Transaction extends Model
      */
     protected $appends = [
         'operation_code',
+        'created_by',
     ];
 
     public function getOperationCodeAttribute(): ?string
     {
         return $this->operation?->code;
+    }
+
+    /**
+     * Chantier "Équipe" étape 3 — { id, name, role } de l'auteur réel de
+     * l'opération de cette ligne, pour "par Koffi (Caissier)" dans la liste
+     * des transactions. Toujours `null` si `operation` (et sa propre
+     * relation createdBy/user) n'ont pas été eager-loadés explicitement —
+     * CET appended attribute tourne sur CHAQUE sérialisation de Transaction
+     * dans toute l'app (recherche, rejeu d'idempotence, apport/retrait,
+     * restauration...), donc jamais de lazy load ici : ça chargerait un
+     * User COMPLET (8 accessors appended, coûteux) à chaque fois, voir le
+     * commentaire au-dessus de loadTransactionForResponse(). Seuls
+     * TransactionController::index()/show()/loadTransactionForResponse()
+     * eager-loadent `operation.createdBy`/`operation.user` et appellent
+     * ensuite `$transaction->operation->makeHidden(['createdBy','user'])` —
+     * ailleurs, l'auteur est simplement absent (dégradation sans risque).
+     */
+    public function getCreatedByAttribute(): ?array
+    {
+        if (!$this->relationLoaded('operation')) {
+            return null;
+        }
+
+        $operation = $this->getRelationValue('operation');
+        if (!$operation || (!$operation->relationLoaded('createdBy') && !$operation->relationLoaded('user'))) {
+            return null;
+        }
+
+        return $operation->created_by;
     }
 
     /**

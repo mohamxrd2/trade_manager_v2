@@ -124,9 +124,14 @@ class TransactionController extends Controller
             },
             'article.user.settings',
             'variation',
-            'operation',
+            // .createdBy/.user : nécessaires à Transaction::getCreatedByAttribute()
+            // (délègue à Operation::getCreatedByAttribute()) — sans ça, N+1 par
+            // transaction au lieu d'un eager load.
+            'operation.createdBy',
+            'operation.user',
         ]);
         $transaction->article?->makeHidden('user');
+        $transaction->operation?->makeHidden(['createdBy', 'user']);
 
         return $transaction;
     }
@@ -207,7 +212,10 @@ class TransactionController extends Controller
                     'variation' => $withSoldQuantity,
                     'variation.article.user.settings',
                     // operation_code (appended, voir Transaction::getOperationCodeAttribute()).
-                    'operation',
+                    // .createdBy/.user : idem pour created_by (chantier "Équipe" étape 3) —
+                    // sans cet eager load, un ->created_by par ligne déclencherait un N+1.
+                    'operation.createdBy',
+                    'operation.user',
                 ]);
 
             if ($request->filled('type')) {
@@ -274,6 +282,12 @@ class TransactionController extends Controller
             $transactions->each(function (Transaction $transaction) {
                 $transaction->article?->makeHidden('user');
                 $transaction->variation?->article?->makeHidden('user');
+                // created_by (appended ci-dessus) est déjà le { id, name, role }
+                // léger qu'il faut exposer — les relations createdBy/user
+                // elles-mêmes (chargées seulement pour alimenter cet accessor
+                // sans N+1) ne doivent jamais apparaître telles quelles dans
+                // le JSON (User complet, coûteux — même raison que ci-dessus).
+                $transaction->operation?->makeHidden(['createdBy', 'user']);
             });
 
             return response()->json([
@@ -460,7 +474,7 @@ class TransactionController extends Controller
                     $query->withSum(['transactions' => function ($q) {
                         $q->where('type', 'sale');
                     }], 'quantity');
-                }, 'variation', 'operation'])
+                }, 'variation', 'operation.createdBy', 'operation.user'])
                 ->first();
 
             if (!$transaction) {
@@ -469,6 +483,8 @@ class TransactionController extends Controller
                     'message' => 'Transaction non trouvée'
                 ], 404);
             }
+
+            $transaction->operation?->makeHidden(['createdBy', 'user']);
 
             return response()->json([
                 'success' => true,

@@ -4,6 +4,7 @@ use App\Models\Collaborator;
 use App\Models\Company;
 use App\Models\MemberPermission;
 use App\Models\Operation;
+use App\Models\Transaction;
 use App\Models\User;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\DB;
@@ -488,6 +489,38 @@ test('supprimer un membre qui a des ventes : les ventes restent, avec son nom co
     $saleResponse->assertOk();
     expect($saleResponse->json('data.created_by.id'))->toBe($member->id);
     expect($saleResponse->json('data.author_name'))->toContain('Membre');
+});
+
+test('GET /api/transactions expose created_by (auteur) sur chaque ligne, sans casser apport/retrait', function () {
+    $owner = v2Owner('H');
+    $member = v2Member($owner, 'cashier');
+
+    $this->actingAs($member);
+    $tx = Transaction::create([
+        'user_id' => $owner->id,
+        'name' => 'Vente H',
+        'amount' => 5000,
+        'type' => 'sale',
+    ]);
+
+    $response = $this->actingAs($owner)->getJson('/api/transactions');
+    $response->assertOk();
+
+    $row = collect($response->json('data'))->firstWhere('id', $tx->id);
+    expect($row['created_by']['id'])->toBe($member->id);
+    expect($row['created_by']['role'])->toBe('cashier');
+
+    // Non-régression du bug corrigé : created_by sur Transaction ne doit
+    // jamais lazy-charger un User complet (coûteux, et casse en pratique
+    // sur un schéma de test minimal sans table articles) — un apport doit
+    // continuer à répondre 201 normalement.
+    $depositResponse = $this->actingAs($owner)->postJson('/api/transactions', [
+        'type' => 'apport',
+        'funding_source' => 'apport_personnel',
+        'amount' => 10000,
+        'payment_method' => 'especes',
+    ]);
+    $depositResponse->assertStatus(201);
 });
 
 test('supprimer un associé rend sa part au propriétaire', function () {
