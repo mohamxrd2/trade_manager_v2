@@ -95,6 +95,10 @@ return [
         // CORS la refuse et le navigateur bloque la requête réelle avant même
         // qu'elle n'atteigne Laravel (vu côté client comme "Network Error").
         'Idempotency-Key',
+        // Compte affiché par l'onglet, envoyé sur toute écriture (voir
+        // EnsureAccountHeaderMatchesSession) — même raison : sans lui ici, le
+        // préflight échoue et TOUTES les écritures du navigateur sont bloquées.
+        'X-Account-Id',
     ],
 
     /*
