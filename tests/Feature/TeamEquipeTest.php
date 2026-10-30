@@ -681,6 +681,26 @@ test('caissier : peut noter une dépense par défaut ; un ajustement par membre 
     ])->assertStatus(403);
 });
 
+test('caissier : une dépense saisie via POST /api/transactions apparaît dans SES transactions et son solde du jour', function () {
+    $owner = equipeOwner('C');
+    $cashier = equipeMember($owner, 'cashier');
+
+    $created = $this->actingAs($cashier)->withHeader('Idempotency-Key', Str::uuid()->toString())->postJson('/api/transactions', [
+        'type' => 'expense', 'name' => 'Transport', 'amount' => 2500, 'payment_method' => 'especes',
+    ])->assertStatus(201);
+
+    $operation = Operation::find($created->json('data.operation_id'));
+    expect($operation->created_by_user_id)->toBe($cashier->id);
+    expect($operation->user_id)->toBe($owner->id);
+
+    $ids = collect($this->actingAs($cashier)->getJson('/api/transactions')->assertOk()->json('data'))->pluck('id');
+    expect($ids)->toContain($created->json('data.id'));
+
+    $myDay = $this->actingAs($cashier)->getJson('/api/user')->json('my_day');
+    expect((float) $myDay['expenses_total'])->toBe(2500.0);
+    expect((float) $myDay['balance'])->toBe(-2500.0);
+});
+
 test('my_day du caissier : ventes, dépenses et solde du jour (les siens uniquement)', function () {
     $owner = equipeOwner('C');
     $cashier = equipeMember($owner, 'cashier');

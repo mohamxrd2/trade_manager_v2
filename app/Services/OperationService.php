@@ -84,7 +84,11 @@ class OperationService
 
         $operation = Operation::create([
             'user_id' => $userId,
-            'created_by_user_id' => $data['created_by_user_id'] ?? null,
+            // Auteur réel (propriétaire ou membre) : par défaut l'utilisateur
+            // connecté. Sans ce défaut, POST /api/transactions (vente,
+            // dépense, apport/retrait) créait des opérations SANS auteur —
+            // invisibles dans « Mes ventes » et le solde du jour d'un caissier.
+            'created_by_user_id' => $data['created_by_user_id'] ?? \App\Support\CurrentAccount::actorId(),
             'type' => $type,
             'code' => OperationCodeGenerator::next($userId, $type, $occurredAt),
             'payment_method' => $data['payment_method'] ?? null,
