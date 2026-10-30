@@ -58,7 +58,7 @@ Route::get('/auth/{provider}/callback', [SocialAuthController::class, 'handlePro
 Route::post('/auth/{provider}/exchange', [SocialAuthController::class, 'exchangeCode']);
 
 // Protected routes (authentication required)
-Route::middleware(['auth:sanctum', 'active_member', 'must_change_password'])->group(function () {
+Route::middleware(['auth:sanctum', 'active_member', 'must_change_password', 'account.guard'])->group(function () {
     Route::post('/logout', [AuthController::class, 'logout'])->name('logout');
     Route::get('/user', [AuthController::class, 'user'])->name('user');
     

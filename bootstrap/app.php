@@ -36,6 +36,7 @@ return Application::configure(basePath: dirname(__DIR__))
             'permission' => \App\Http\Middleware\EnsurePermission::class,
             'must_change_password' => \App\Http\Middleware\EnsureNotMustChangePassword::class,
             'active_member' => \App\Http\Middleware\EnsureMemberActive::class,
+            'account.guard' => \App\Http\Middleware\EnsureAccountHeaderMatchesSession::class,
         ]);
     })
     ->withExceptions(function (Exceptions $exceptions): void {

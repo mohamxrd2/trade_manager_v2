@@ -994,3 +994,85 @@ test('team:repair en dry-run ne modifie rien ; avec --force corrige account_id',
     $this->artisan('team:repair', ['--force' => true])->assertExitCode(0);
     expect(User::find($memberId)->account_id)->toBe($owner->id); // corrigé
 });
+
+/*
+|--------------------------------------------------------------------------
+| 10. Synchronisation de session entre onglets — en-tête X-Account-Id
+|--------------------------------------------------------------------------
+| Le frontend pose X-Account-Id = le compte AFFICHÉ par l'onglet sur toute
+| requête qui écrit. S'il diverge du compte de la session (cookie partagé
+| entre onglets, un autre onglet a changé de compte), le serveur refuse
+| avec 409 AVANT d'exécuter le contrôleur — rien n'est enregistré. Le
+| compte utilisé reste TOUJOURS celui de la session, jamais celui de
+| l'en-tête (voir EnsureAccountHeaderMatchesSession).
+*/
+
+test('X-Account-Id cohérent avec la session : la requête passe normalement', function () {
+    $owner = v2Owner('HDR_OK');
+
+    $this->actingAs($owner)
+        ->postJson('/api/team', ['name' => 'Membre Header OK', 'has_access' => true, 'role' => 'cashier'], [
+            'X-Account-Id' => $owner->id,
+        ])
+        ->assertStatus(201);
+});
+
+test('X-Account-Id d\'un AUTRE compte sur une écriture : 409, rien n\'est enregistré', function () {
+    $owner = v2Owner('HDR_A');
+    $other = v2Owner('HDR_B');
+
+    $countBefore = User::count();
+
+    $response = $this->actingAs($owner)
+        ->postJson('/api/team', ['name' => 'Membre Fantôme', 'has_access' => true, 'role' => 'cashier'], [
+            'X-Account-Id' => $other->id,
+        ]);
+
+    $response->assertStatus(409);
+    expect($response->json('code'))->toBe('ACCOUNT_MISMATCH');
+    expect(User::count())->toBe($countBefore); // rien créé
+
+    // La session reste bien celle de $owner : avec le BON en-tête, ça fonctionne.
+    $this->actingAs($owner)
+        ->postJson('/api/team', ['name' => 'Membre Réel', 'has_access' => true, 'role' => 'cashier'], [
+            'X-Account-Id' => $owner->id,
+        ])
+        ->assertStatus(201);
+});
+
+test('X-Account-Id mal renseigné n\'affecte jamais une lecture (GET)', function () {
+    $owner = v2Owner('HDR_GET');
+    $other = v2Owner('HDR_GET_OTHER');
+
+    $this->actingAs($owner)
+        ->getJson('/api/team', ['X-Account-Id' => $other->id])
+        ->assertOk();
+});
+
+test('sans en-tête X-Account-Id, une écriture fonctionne normalement (rétrocompatible)', function () {
+    $owner = v2Owner('HDR_NONE');
+
+    $this->actingAs($owner)
+        ->postJson('/api/team', ['name' => 'Sans En-tête', 'has_access' => true, 'role' => 'cashier'])
+        ->assertStatus(201);
+});
+
+test('pour un MEMBRE, X-Account-Id doit être le compte du propriétaire, pas son propre id', function () {
+    $owner = v2Owner('HDR_MEMBER');
+    $member = v2Member($owner, 'cashier');
+
+    // Mauvais : le membre envoie SON PROPRE id comme "compte affiché" —
+    // ce n'est jamais le compte, voir User::accountId().
+    $this->actingAs($member)
+        ->putJson('/api/user/profile', ['first_name' => 'Nouveau'], [
+            'X-Account-Id' => $member->id,
+        ])
+        ->assertStatus(409);
+
+    // Correct : le compte affiché pour un membre est account_id (= celui du propriétaire).
+    $this->actingAs($member)
+        ->putJson('/api/user/profile', ['first_name' => 'Nouveau'], [
+            'X-Account-Id' => $owner->id,
+        ])
+        ->assertOk();
+});
