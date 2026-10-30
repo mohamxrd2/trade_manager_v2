@@ -75,7 +75,9 @@ class Permissions
     {
         return match ($role) {
             'manager' => array_values(array_diff(self::ALL, [self::TEAM_MANAGE, self::SETTINGS_MANAGE])),
-            'cashier' => [self::SALES_CREATE, self::SALES_VIEW_OWN, self::STOCK_VIEW, self::CLIENTS_VIEW],
+            // Un caissier note aussi les dépenses qu'il paie depuis la caisse
+            // (retirable membre par membre via member_permissions).
+            'cashier' => [self::SALES_CREATE, self::SALES_VIEW_OWN, self::STOCK_VIEW, self::CLIENTS_VIEW, self::EXPENSES_CREATE],
             'stock_manager' => [self::STOCK_VIEW, self::STOCK_EDIT, self::STOCK_RESTOCK],
             'accountant' => [
                 self::WALLET_VIEW_BALANCE,

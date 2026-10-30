@@ -32,9 +32,9 @@ class ReceiptSettingController extends Controller
 
     public function index(): JsonResponse
     {
-        if (Auth::user()->cannot(Permissions::SETTINGS_MANAGE)) {
-            return response()->json(['success' => false, 'message' => 'Non autorisé'], 403);
-        }
+        // Lecture ouverte à tout utilisateur du compte : un caissier imprime
+        // ses tickets avec ces réglages. Seule la modification (update) exige
+        // settings.manage.
 
         // Toujours une requête fraîche (jamais `$user->receiptSetting`) :
         // Auth::user() peut être le MÊME objet PHP réutilisé sur plusieurs

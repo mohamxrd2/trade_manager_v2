@@ -490,9 +490,20 @@ class AuthController extends Controller
             ])
             ->values();
 
+        // Ses dépenses du jour (payées depuis sa caisse) → solde du jour =
+        // ce qu'il a encaissé − ce qu'il a dépensé. Jamais le solde global.
+        $expenses = \App\Models\Operation::where('user_id', CurrentAccount::id())
+            ->where('created_by_user_id', $user->id)
+            ->where('type', 'expense')
+            ->whereBetween('occurred_at', [$start, $end]);
+        $expensesTotal = (float) (clone $expenses)->sum('total_amount');
+
         return [
             'sales_count' => $salesCount,
             'total' => round($total, 2),
+            'expenses_count' => (clone $expenses)->count(),
+            'expenses_total' => round($expensesTotal, 2),
+            'balance' => round($total - $expensesTotal, 2),
             'by_payment_method' => $byPaymentMethod,
             'last_sales' => $lastSales,
         ];

@@ -29,13 +29,28 @@ use Illuminate\Support\Str;
 function createTeamEquipeTestSchema(): void
 {
     foreach ([
-        'activity_logs', 'member_permissions', 'sessions', 'notifications',
+        'activity_logs', 'member_permissions', 'sessions', 'notifications', 'receipt_settings',
         'invoice_items', 'invoices', 'stock_replenishments', 'transactions',
         'operations', 'operation_counters', 'clients', 'collaborators',
         'variations', 'articles', 'user_settings', 'companies', 'users',
     ] as $table) {
         Schema::dropIfExists($table);
     }
+
+    Schema::create('receipt_settings', function (Blueprint $table) {
+        $table->uuid('id')->primary();
+        $table->uuid('user_id')->unique();
+        $table->string('width')->default('58mm');
+        $table->boolean('show_logo')->default(true);
+        $table->boolean('show_address')->default(true);
+        $table->boolean('show_phone')->default(true);
+        $table->boolean('show_tax_id')->default(true);
+        $table->string('footer_message', 120)->nullable();
+        $table->boolean('show_qr')->default(true);
+        $table->boolean('show_waelly_mention')->default(true);
+        $table->boolean('auto_print')->default(false);
+        $table->timestamps();
+    });
 
     Schema::create('users', function (Blueprint $table) {
         $table->uuid('id')->primary();
@@ -580,6 +595,14 @@ test('cashier : LIT les paramètres et l’entreprise du compte (devise, langue,
         ->assertJsonPath('data.user_id', $owner->id);
 });
 
+test('cashier : lit les réglages du ticket (pour imprimer), sans pouvoir les modifier', function () {
+    $owner = equipeOwner('C');
+    $cashier = equipeMember($owner, 'cashier');
+
+    $this->actingAs($cashier)->getJson('/api/receipt-settings')->assertOk();
+    $this->actingAs($cashier)->putJson('/api/receipt-settings', ['width' => '80mm'])->assertStatus(403);
+});
+
 test('cashier : peut supprimer SA PROPRE vente dans les 10 minutes, pas celle d’un autre caissier', function () {
     $owner = equipeOwner('C');
     // sales.delete_own_recent n'est PAS dans les permissions par défaut du
@@ -643,20 +666,40 @@ test('GET /api/user conserve les champs financiers pour le propriétaire', funct
     expect($response->json('balance'))->not->toBeNull();
 });
 
-test('un ajustement par membre (expenses.create accordé à un caissier) fonctionne', function () {
+test('caissier : peut noter une dépense par défaut ; un ajustement par membre peut le lui retirer', function () {
     $owner = equipeOwner('C');
     $cashier = equipeMember($owner, 'cashier');
 
-    // Sans l'ajustement : refusé.
     $this->actingAs($cashier)->withHeader('Idempotency-Key', Str::uuid()->toString())->postJson('/api/operations', [
         'type' => 'expense', 'payment_method' => 'especes', 'lines' => [['amount' => 3000, 'name' => 'Transport']],
-    ])->assertStatus(403);
+    ])->assertStatus(201);
 
-    MemberPermission::create(['user_id' => $cashier->id, 'permission' => 'expenses.create', 'granted' => true]);
+    MemberPermission::create(['user_id' => $cashier->id, 'permission' => 'expenses.create', 'granted' => false]);
 
     $this->actingAs($cashier->fresh())->withHeader('Idempotency-Key', Str::uuid()->toString())->postJson('/api/operations', [
         'type' => 'expense', 'payment_method' => 'especes', 'lines' => [['amount' => 3000, 'name' => 'Transport']],
-    ])->assertStatus(201);
+    ])->assertStatus(403);
+});
+
+test('my_day du caissier : ventes, dépenses et solde du jour (les siens uniquement)', function () {
+    $owner = equipeOwner('C');
+    $cashier = equipeMember($owner, 'cashier');
+    $other = equipeMember($owner, 'cashier');
+
+    foreach ([[$cashier, 'sale', 10000], [$cashier, 'sale', 5000], [$cashier, 'expense', 2000], [$other, 'sale', 99000]] as $i => [$author, $type, $amount]) {
+        Operation::create([
+            'user_id' => $owner->id, 'created_by_user_id' => $author->id, 'type' => $type,
+            'code' => 'MD-' . $i, 'payment_method' => 'especes', 'total_amount' => $amount, 'occurred_at' => now(),
+        ]);
+    }
+
+    $myDay = $this->actingAs($cashier)->getJson('/api/user')->assertOk()->json('my_day');
+
+    expect($myDay['sales_count'])->toBe(2);
+    expect((float) $myDay['total'])->toBe(15000.0);
+    expect($myDay['expenses_count'])->toBe(1);
+    expect((float) $myDay['expenses_total'])->toBe(2000.0);
+    expect((float) $myDay['balance'])->toBe(13000.0);
 });
 
 /*
