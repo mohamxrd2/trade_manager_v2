@@ -180,8 +180,8 @@ class AuthController extends Controller
         // Régénération de la session pour la sécurité
         $request->session()->regenerate();
 
-        // Retourner directement l'utilisateur (format simplifié, comme login)
-        return response()->json($user, 201);
+        // Même représentation que login et GET /api/user.
+        return response()->json($this->userPayload($user), 201);
     }
 
     /**
@@ -389,8 +389,9 @@ class AuthController extends Controller
             ActivityLogger::log($user->id, 'team.member_login');
         }
 
-        // Retourner directement l'utilisateur (format simplifié)
-        return response()->json($user);
+        // Même représentation que GET /api/user (permissions, my_day, champs
+        // financiers masqués pour un caissier…).
+        return response()->json($this->userPayload($user));
     }
 
     /**
@@ -419,11 +420,24 @@ class AuthController extends Controller
             return response()->json(['message' => 'Non authentifié'], 401);
         }
 
+        return response()->json($this->userPayload($user));
+    }
+
+    /**
+     * Représentation UNIQUE de l'utilisateur connecté — renvoyée par
+     * GET /api/user ET par POST /api/login. Avant, la connexion renvoyait
+     * le modèle brut : sans permissions ni my_day (le front affichait le
+     * tableau de bord du gérant à un caissier jusqu'au rechargement) et AVEC
+     * les champs financiers globaux qu'un caissier ne doit jamais recevoir.
+     */
+    private function userPayload(User $user): array
+    {
         // Charger l'entreprise/les paramètres DU COMPTE — un membre n'a pas
         // sa propre entreprise ni ses propres paramètres, il utilise ceux du
         // propriétaire (voir User::accountId()).
-        $user->setRelation('company', Company::where('user_id', CurrentAccount::id())->first());
-        $user->setRelation('settings', UserSetting::where('user_id', CurrentAccount::id())->first());
+        $accountId = $user->accountId();
+        $user->setRelation('company', Company::where('user_id', $accountId)->first());
+        $user->setRelation('settings', UserSetting::where('user_id', $accountId)->first());
 
         $payload = $user->toArray();
         $payload['is_owner'] = $user->isOwner();
@@ -444,7 +458,7 @@ class AuthController extends Controller
             $payload['my_day'] = null;
         }
 
-        return response()->json($payload);
+        return $payload;
     }
 
     /**
@@ -458,7 +472,7 @@ class AuthController extends Controller
         $start = \Illuminate\Support\Carbon::now($timezone)->startOfDay();
         $end = \Illuminate\Support\Carbon::now($timezone)->endOfDay();
 
-        $query = fn () => \App\Models\Operation::where('user_id', CurrentAccount::id())
+        $query = fn () => \App\Models\Operation::where('user_id', $user->accountId())
             ->where('created_by_user_id', $user->id)
             ->where('type', 'sale')
             ->whereBetween('occurred_at', [$start, $end]);
@@ -492,7 +506,7 @@ class AuthController extends Controller
 
         // Ses dépenses du jour (payées depuis sa caisse) → solde du jour =
         // ce qu'il a encaissé − ce qu'il a dépensé. Jamais le solde global.
-        $expenses = \App\Models\Operation::where('user_id', CurrentAccount::id())
+        $expenses = \App\Models\Operation::where('user_id', $user->accountId())
             ->where('created_by_user_id', $user->id)
             ->where('type', 'expense')
             ->whereBetween('occurred_at', [$start, $end]);

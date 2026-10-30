@@ -744,6 +744,16 @@ test('un membre se connecte avec son identifiant + son code à 6 chiffres', func
 
     $response->assertOk();
     expect($response->json('id'))->toBe($member->id);
+
+    // Même représentation que GET /api/user : permissions et caisse du jour,
+    // jamais les champs financiers globaux (le front s'appuie dessus dès la
+    // connexion, sans rechargement).
+    expect($response->json('is_owner'))->toBeFalse();
+    expect($response->json('permissions'))->toContain('sales.create')->not->toContain('wallet.view_balance');
+    expect($response->json('my_day'))->toBeArray();
+    foreach (['balance', 'total_sale', 'wallet', 'company_share', 'calculated_wallet'] as $field) {
+        expect($response->json())->not->toHaveKey($field);
+    }
 });
 
 test('un membre must_change_password=true est bloqué partout sauf changer son code', function () {
