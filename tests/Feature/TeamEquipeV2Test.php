@@ -1076,3 +1076,26 @@ test('pour un MEMBRE, X-Account-Id doit être le compte du propriétaire, pas so
         ])
         ->assertOk();
 });
+
+test('toute réponse authentifiée porte X-Account-Id = le compte de la session (propriétaire ET membre)', function () {
+    $owner = v2Owner('HDR_RESP');
+
+    $this->actingAs($owner)->getJson('/api/team')
+        ->assertOk()
+        ->assertHeader('X-Account-Id', $owner->id);
+
+    $member = v2Member($owner, 'cashier');
+    $this->actingAs($member)->getJson('/api/user')
+        ->assertOk()
+        ->assertHeader('X-Account-Id', $owner->id);
+});
+
+test('le refus 409 ACCOUNT_MISMATCH indique aussi le vrai compte de la session', function () {
+    $owner = v2Owner('HDR_409');
+    $other = v2Owner('HDR_409_B');
+
+    $this->actingAs($owner)
+        ->postJson('/api/team', ['name' => 'X', 'has_access' => true, 'role' => 'cashier'], ['X-Account-Id' => $other->id])
+        ->assertStatus(409)
+        ->assertHeader('X-Account-Id', $owner->id);
+});

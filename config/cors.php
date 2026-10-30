@@ -113,6 +113,9 @@ return [
         'X-RateLimit-Remaining',
         'X-RateLimit-Reset',
         'Retry-After',
+        // Compte de la session, comparé par le front au compte affiché par
+        // l'onglet (voir EnsureAccountHeaderMatchesSession).
+        'X-Account-Id',
     ],
 
     /*

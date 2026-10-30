@@ -26,7 +26,8 @@ use Symfony\Component\HttpFoundation\Response;
  *
  * Lecture seule (GET/HEAD/OPTIONS) et en-tête absent : laissé passer sans
  * contrôle — seules les requêtes qui écrivent et qui PRÉCISENT un compte
- * affiché sont concernées.
+ * affiché sont refusées. En revanche TOUTE réponse renvoie `X-Account-Id`
+ * (le compte de la session), que le frontend vérifie aussi sur les lectures.
  */
 class EnsureAccountHeaderMatchesSession
 {
@@ -34,23 +35,36 @@ class EnsureAccountHeaderMatchesSession
 
     public function handle(Request $request, Closure $next): Response
     {
-        if (in_array($request->method(), self::SAFE_METHODS, true)) {
-            return $next($request);
-        }
-
+        $accountId = CurrentAccount::id();
         $headerAccountId = $request->header('X-Account-Id');
-        if (!$headerAccountId) {
-            return $next($request);
-        }
 
-        if ($headerAccountId !== CurrentAccount::id()) {
-            return response()->json([
+        if (
+            !in_array($request->method(), self::SAFE_METHODS, true)
+            && $headerAccountId
+            && $headerAccountId !== $accountId
+        ) {
+            return $this->withAccountHeader(response()->json([
                 'success' => false,
                 'code' => 'ACCOUNT_MISMATCH',
                 'message' => 'Votre session a changé, rechargez la page.',
-            ], 409);
+            ], 409), $accountId);
         }
 
-        return $next($request);
+        return $this->withAccountHeader($next($request), $accountId);
+    }
+
+    /**
+     * Toute réponse porte le compte de la session : le frontend la compare au
+     * compte AFFICHÉ par l'onglet et recharge s'ils divergent — couvre aussi
+     * les LECTURES (sinon un onglet resté sur le compte A afficherait, sous
+     * l'étiquette A, des données du compte B).
+     */
+    private function withAccountHeader(Response $response, ?string $accountId): Response
+    {
+        if ($accountId) {
+            $response->headers->set('X-Account-Id', $accountId);
+        }
+
+        return $response;
     }
 }
