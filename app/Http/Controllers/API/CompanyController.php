@@ -204,9 +204,9 @@ class CompanyController extends Controller
      */
     public function show(): JsonResponse
     {
-        if (Auth::user()->cannot(Permissions::SETTINGS_MANAGE)) {
-            return response()->json(['success' => false, 'message' => 'Non autorisé'], 403);
-        }
+        // Lecture ouverte à tout utilisateur du compte (membres compris) : nom
+        // et logo de l'entreprise affichés dans le menu et sur les tickets.
+        // Seules les MODIFICATIONS exigent settings.manage.
 
         try {
             $company = Company::where('user_id', CurrentAccount::id())->first();

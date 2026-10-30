@@ -561,7 +561,21 @@ test('cashier : 403 sur team.manage et settings.manage', function () {
     $cashier = equipeMember($owner, 'cashier');
 
     $this->actingAs($cashier)->getJson('/api/team')->assertStatus(403);
-    $this->actingAs($cashier)->getJson('/api/user/settings')->assertStatus(403);
+    $this->actingAs($cashier)->putJson('/api/user/settings', ['currency' => 'EUR'])->assertStatus(403);
+    $this->actingAs($cashier)->putJson('/api/company', ['name' => 'Piratée'])->assertStatus(403);
+});
+
+test('cashier : LIT les paramètres et l’entreprise du compte (devise, langue, nom, logo), sans pouvoir les modifier', function () {
+    $owner = equipeOwner('C');
+    $this->actingAs($owner)->putJson('/api/user/settings', ['currency' => 'EUR'])->assertOk();
+    $cashier = equipeMember($owner, 'cashier');
+
+    $this->actingAs($cashier)->getJson('/api/user/settings')
+        ->assertOk()
+        ->assertJsonPath('data.currency', 'EUR');
+    $this->actingAs($cashier)->getJson('/api/company')
+        ->assertOk()
+        ->assertJsonPath('data.user_id', $owner->id);
 });
 
 test('cashier : peut supprimer SA PROPRE vente dans les 10 minutes, pas celle d’un autre caissier', function () {

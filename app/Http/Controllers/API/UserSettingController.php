@@ -18,9 +18,10 @@ class UserSettingController extends Controller
      */
     public function index(): JsonResponse
     {
-        if (Auth::user()->cannot(Permissions::SETTINGS_MANAGE)) {
-            return response()->json(['success' => false, 'message' => 'Non autorisé'], 403);
-        }
+        // Lecture ouverte à tout utilisateur du compte (membres compris) : la
+        // devise, la langue et le seuil de stock du compte s'appliquent à toute
+        // l'équipe — l'app les charge sur chaque page. Seule la MODIFICATION
+        // (update) exige settings.manage.
 
         try {
             $settings = UserSetting::where('user_id', CurrentAccount::id())->first();
