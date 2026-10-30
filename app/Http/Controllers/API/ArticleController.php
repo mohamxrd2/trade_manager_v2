@@ -233,10 +233,25 @@ class ArticleController extends Controller
                 ], 404);
             }
 
+            // « Vendus / CA sur 30 jours » de la fiche produit, calculés ici :
+            // le front les tirait de GET /api/transactions, refusé à qui ne
+            // voit pas les ventes (gestionnaire de stock). Les unités vendues
+            // servent à gérer le stock (stock.view suffit) ; le chiffre
+            // d'affaires reste réservé à qui voit les finances.
+            $recentSales = $article->transactions()
+                ->where('type', 'sale')
+                ->where('created_at', '>=', now()->subDays(30));
+            $canSeeRevenue = Auth::user()->can(Permissions::WALLET_VIEW_BALANCE) || Auth::user()->can(Permissions::ANALYTICS_VIEW);
+            $data = $article->toArray();
+            $data['last_30_days'] = [
+                'units_sold' => (int) (clone $recentSales)->sum('quantity'),
+                'revenue' => $canSeeRevenue ? (float) (clone $recentSales)->sum('amount') : null,
+            ];
+
             return response()->json([
                 'success' => true,
                 'message' => 'Article récupéré avec succès',
-                'data' => $article
+                'data' => $data
             ]);
         } catch (\Exception $e) {
             return response()->json([

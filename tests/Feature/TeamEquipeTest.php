@@ -681,6 +681,21 @@ test('caissier : peut noter une dépense par défaut ; un ajustement par membre 
     ])->assertStatus(403);
 });
 
+test('fiche article : ventes des 30 derniers jours pour le gestionnaire de stock (unités, sans le CA)', function () {
+    $owner = equipeOwner('P');
+    $article = Article::create(['user_id' => $owner->id, 'name' => 'Robe', 'sale_price' => 10000, 'quantity' => 20, 'type' => 'simple']);
+    Transaction::create(['user_id' => $owner->id, 'article_id' => $article->id, 'name' => 'Vente', 'quantity' => 3, 'amount' => 30000, 'type' => 'sale']);
+
+    config(['auth.defaults.guard' => 'web']); app('auth')->forgetGuards();
+    $stock = $this->actingAs(equipeMember($owner, 'stock_manager'))->getJson("/api/articles/{$article->id}")->assertOk();
+    expect($stock->json('data.last_30_days.units_sold'))->toBe(3);
+    expect($stock->json('data.last_30_days.revenue'))->toBeNull();
+
+    config(['auth.defaults.guard' => 'web']); app('auth')->forgetGuards();
+    $ownerView = $this->actingAs($owner)->getJson("/api/articles/{$article->id}")->assertOk();
+    expect((float) $ownerView->json('data.last_30_days.revenue'))->toBe(30000.0);
+});
+
 test('GET /api/user d’un membre : totaux du COMPTE (valeur du stock, articles, ventes), jamais 0 ni ceux d’un autre compte', function () {
     $owner = equipeOwner('S');
     $otherOwner = equipeOwner('T');
