@@ -246,6 +246,41 @@ function v2Owner(string $tag): User
     return $owner;
 }
 
+/**
+ * Même effet que $this->actingAs($user), mais sûr à utiliser PLUSIEURS FOIS
+ * dans le MÊME test avec des utilisateurs DIFFÉRENTS pour simuler des
+ * requêtes HTTP indépendantes (chantier équipe, bug account_id — tests
+ * 9+ ci-dessous).
+ *
+ * Pourquoi : auth:sanctum, une fois une 1ʳᵉ requête authentifiée, appelle
+ * Auth::shouldUse('sanctum') qui RÉÉCRIT config('auth.defaults.guard')
+ * pour le reste du test (AuthManager::setDefaultDriver() mute directement
+ * la config, un singleton PARTAGÉ entre tous les appels HTTP d'un même
+ * test — contrairement à une vraie requête PHP-FPM, qui reconstruit tout
+ * le conteneur à chaque fois). $this->actingAs($user) sans guard explicite
+ * résout alors le guard 'sanctum' (plus 'web'), dont
+ * Illuminate\Auth\RequestGuard mémorise l'utilisateur résolu POUR TOUJOURS
+ * (RequestGuard::user() : "we do not want to fetch the user data on every
+ * call"). Résultat observé en écrivant les tests de cette section :
+ * AuthController::user() (qui lit explicitement Auth::guard('web')) reste
+ * bloqué sur le TOUT PREMIER utilisateur du test, alors que
+ * CurrentAccount::id() (qui lit Auth::user(), le guard par défaut) suit
+ * correctement chaque actingAs() — une divergence invisible en production
+ * (une requête réelle ne partage jamais ce cache), mais qui aurait rendu
+ * les tests d'isolation ci-dessous faussement verts.
+ *
+ * Remettre explicitement le défaut à 'web' + vider le cache de guards
+ * avant CHAQUE actingAs() élimine cette divergence : les deux guards sont
+ * reconstruits à neuf, cohérents entre eux, comme au tout premier appel.
+ */
+function v2ActingAs($test, User $user)
+{
+    config(['auth.defaults.guard' => 'web']);
+    app('auth')->forgetGuards();
+
+    return $test->actingAs($user);
+}
+
 function v2Member(User $owner, string $role, array $overrides = []): User
 {
     return User::create(array_merge([
@@ -790,4 +825,172 @@ test('PATCH /api/team/{id} avec l\'email d\'un AUTRE compte renvoie 422 ; garder
 
     $this->actingAs($owner)->patchJson("/api/team/{$member->id}", ['email' => $member->email])
         ->assertOk();
+});
+
+/*
+|--------------------------------------------------------------------------
+| 9. Bug critique sécurité — account_id mal rattaché à un AUTRE compte
+|--------------------------------------------------------------------------
+| Un membre créé par le compte A doit TOUJOURS avoir account_id = A, même
+| si deux comptes créent des membres en alternance dans la même suite (pour
+| détecter un éventuel état conservé entre deux requêtes - CurrentAccount
+| ou autre singleton), et même si le frontend envoie un account_id/user_id/
+| owner_id falsifié : ces champs ne sont jamais lus, ils doivent être
+| totalement ignorés par le serveur.
+*/
+
+test('deux comptes qui créent des membres en alternance : account_id ne se mélange jamais', function () {
+    $ownerA = v2Owner('ALT_A');
+    $ownerB = v2Owner('ALT_B');
+
+    $resp1 = v2ActingAs($this, $ownerA)->postJson('/api/team', [
+        'name' => 'Membre A1', 'has_access' => true, 'role' => 'cashier',
+    ])->assertStatus(201);
+    $member1 = User::find($resp1->json('data.team_member.id'));
+    expect($member1->account_id)->toBe($ownerA->id);
+
+    $resp2 = v2ActingAs($this, $ownerB)->postJson('/api/team', [
+        'name' => 'Membre B1', 'has_access' => true, 'role' => 'cashier',
+    ])->assertStatus(201);
+    $member2 = User::find($resp2->json('data.team_member.id'));
+    expect($member2->account_id)->toBe($ownerB->id);
+
+    $resp3 = v2ActingAs($this, $ownerA)->postJson('/api/team', [
+        'name' => 'Membre A2', 'has_access' => true, 'role' => 'stock_manager',
+    ])->assertStatus(201);
+    $member3 = User::find($resp3->json('data.team_member.id'));
+    expect($member3->account_id)->toBe($ownerA->id);
+
+    // Aucun membre de A ne doit jamais porter l'account_id de B, et inversement.
+    expect(User::where('account_id', $ownerA->id)->pluck('id'))
+        ->toContain($member1->id, $member3->id)
+        ->not->toContain($member2->id);
+    expect(User::where('account_id', $ownerB->id)->pluck('id'))
+        ->toContain($member2->id)
+        ->not->toContain($member1->id, $member3->id);
+});
+
+test('un account_id/user_id/owner_id falsifié envoyé par le frontend est ignoré — le membre est créé pour le compte connecté', function () {
+    $ownerA = v2Owner('SPOOF_A');
+    $ownerB = v2Owner('SPOOF_B');
+
+    $response = v2ActingAs($this, $ownerA)->postJson('/api/team', [
+        'name' => 'Membre Usurpé',
+        'has_access' => true,
+        'role' => 'cashier',
+        // Champs falsifiés : jamais lus par TeamController::store(), donc
+        // ignorés — le membre doit être créé pour A (le compte connecté),
+        // jamais pour B.
+        'account_id' => $ownerB->id,
+        'user_id' => $ownerB->id,
+        'owner_id' => $ownerB->id,
+    ])->assertStatus(201);
+
+    $member = User::find($response->json('data.team_member.id'));
+    expect($member->account_id)->toBe($ownerA->id);
+    expect($member->account_id)->not->toBe($ownerB->id);
+});
+
+test('grantAccess : collaborator et compte d\'accès créés dans la même transaction partagent le même account_id', function () {
+    $owner = v2Owner('CONSIST');
+
+    $partnerResponse = $this->actingAs($owner)->postJson('/api/team', [
+        'name' => 'Associé Cohérent', 'is_partner' => true, 'share' => 20,
+    ])->assertStatus(201);
+    $collaboratorId = $partnerResponse->json('data.team_member.id');
+
+    $this->actingAs($owner)->postJson("/api/team/{$collaboratorId}/access", [
+        'role' => 'manager',
+    ])->assertStatus(201);
+
+    $collaborator = Collaborator::find($collaboratorId);
+    $member = User::find($collaborator->user_id_member);
+
+    expect($member->account_id)->toBe($collaborator->user_id);
+    expect($member->account_id)->toBe($owner->id);
+});
+
+test('member de A ne voit aucune personne ni donnée de B via /api/team et /api/user', function () {
+    $ownerA = v2Owner('ISO_A');
+    $ownerB = v2Owner('ISO_B');
+    $memberOfA = v2Member($ownerA, 'manager');
+    $memberOfB = v2Member($ownerB, 'cashier');
+
+    // GET /api/team nécessite team.manage (le propriétaire l'a toujours,
+    // voir Gate::before) : A ne doit jamais voir B dans sa liste, ni
+    // inversement, même avec deux comptes/membres actifs en parallèle.
+    $teamAsOwnerA = v2ActingAs($this, $ownerA)->getJson('/api/team');
+    $teamAsOwnerA->assertOk();
+    $idsA = collect($teamAsOwnerA->json('data'))->pluck('id')->all();
+    expect($idsA)->toContain($ownerA->id, $memberOfA->id);
+    expect($idsA)->not->toContain($ownerB->id, $memberOfB->id);
+
+    $teamAsOwnerB = v2ActingAs($this, $ownerB)->getJson('/api/team');
+    $teamAsOwnerB->assertOk();
+    $idsB = collect($teamAsOwnerB->json('data'))->pluck('id')->all();
+    expect($idsB)->toContain($ownerB->id, $memberOfB->id);
+    expect($idsB)->not->toContain($ownerA->id, $memberOfA->id);
+
+    // GET /api/user : le membre de A ne doit voir que SON propre compte,
+    // rattaché à A, jamais à B.
+    $userAsMemberA = v2ActingAs($this, $memberOfA)->getJson('/api/user');
+    $userAsMemberA->assertOk();
+    expect($userAsMemberA->json('id'))->toBe($memberOfA->id);
+    expect($userAsMemberA->json('account_id'))->toBe($ownerA->id);
+    expect($userAsMemberA->json('account_id'))->not->toBe($ownerB->id);
+});
+
+test('team:audit (lecture seule) ne signale aucune incohérence sur des données saines', function () {
+    $owner = v2Owner('AUDIT_OK');
+    $partnerResponse = $this->actingAs($owner)->postJson('/api/team', [
+        'name' => 'Associé Audité', 'is_partner' => true, 'share' => 10,
+    ])->assertStatus(201);
+    $this->actingAs($owner)->postJson("/api/team/{$partnerResponse->json('data.team_member.id')}/access", [
+        'role' => 'accountant',
+    ])->assertStatus(201);
+
+    $this->artisan('team:audit')->assertExitCode(0);
+});
+
+test('team:audit détecte une incohérence introduite directement en base (hors API)', function () {
+    $owner = v2Owner('AUDIT_BAD');
+    $other = v2Owner('AUDIT_OTHER');
+
+    $partnerResponse = $this->actingAs($owner)->postJson('/api/team', [
+        'name' => 'Associé Corrompu', 'is_partner' => true, 'share' => 10,
+    ])->assertStatus(201);
+    $collaboratorId = $partnerResponse->json('data.team_member.id');
+    $this->actingAs($owner)->postJson("/api/team/{$collaboratorId}/access", [
+        'role' => 'accountant',
+    ])->assertStatus(201);
+
+    // Corruption directe en base (hors API), pour simuler la situation
+    // signalée : account_id d'un membre pointant sur un AUTRE compte.
+    $collaborator = Collaborator::find($collaboratorId);
+    User::where('id', $collaborator->user_id_member)->update(['account_id' => $other->id]);
+
+    $this->artisan('team:audit')->assertExitCode(1);
+});
+
+test('team:repair en dry-run ne modifie rien ; avec --force corrige account_id', function () {
+    $owner = v2Owner('REPAIR');
+    $other = v2Owner('REPAIR_OTHER');
+
+    $partnerResponse = $this->actingAs($owner)->postJson('/api/team', [
+        'name' => 'Associé À Réparer', 'is_partner' => true, 'share' => 10,
+    ])->assertStatus(201);
+    $collaboratorId = $partnerResponse->json('data.team_member.id');
+    $this->actingAs($owner)->postJson("/api/team/{$collaboratorId}/access", [
+        'role' => 'accountant',
+    ])->assertStatus(201);
+
+    $collaborator = Collaborator::find($collaboratorId);
+    $memberId = $collaborator->user_id_member;
+    User::where('id', $memberId)->update(['account_id' => $other->id]);
+
+    $this->artisan('team:repair')->assertExitCode(0);
+    expect(User::find($memberId)->account_id)->toBe($other->id); // dry-run : rien n'a changé
+
+    $this->artisan('team:repair', ['--force' => true])->assertExitCode(0);
+    expect(User::find($memberId)->account_id)->toBe($owner->id); // corrigé
 });

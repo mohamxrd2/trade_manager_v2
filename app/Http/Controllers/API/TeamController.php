@@ -182,6 +182,10 @@ class TeamController extends Controller
                 NotificationService::notifyTeamJoined($collaborator);
             }
 
+            if ($accessUser && $collaborator) {
+                TeamService::assertAccountConsistency($accessUser, $collaborator);
+            }
+
             ActivityLogger::log(Auth::id(), 'team.person_added', User::class, $accessUser?->id ?? $collaborator?->id, [
                 'is_partner' => $isPartner,
                 'has_access' => $hasAccess,
@@ -378,6 +382,8 @@ class TeamController extends Controller
 
             $collaborator->user_id_member = $accessUser->id;
             $collaborator->save();
+
+            TeamService::assertAccountConsistency($accessUser, $collaborator);
 
             if ($request->filled('permissions_overrides')) {
                 TeamService::applyPermissionOverrides($accessUser, $request->permissions_overrides);

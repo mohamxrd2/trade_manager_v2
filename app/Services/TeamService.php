@@ -8,6 +8,7 @@ use App\Models\MemberPermission;
 use App\Models\User;
 use App\Support\AccountCode;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Log;
 
 /**
  * Chantier "Équipe" étape 2 — logique PARTAGÉE entre CollaboratorController
@@ -136,6 +137,38 @@ class TeamService
         $member->forceFill(['email_verified_at' => now()])->save();
 
         return [$member, $code];
+    }
+
+    /**
+     * Garde-fou "sécurité" (chantier équipe, bug account_id mal rattaché) :
+     * quand une personne a À LA FOIS un compte d'accès et une fiche associé,
+     * les deux DOIVENT pointer sur le même compte — ils viennent toujours du
+     * même $accountId dans la même transaction (voir store()/grantAccess()
+     * dans TeamController), donc une divergence ici ne peut venir que d'une
+     * corruption de données pré-existante. En local/testing on fait
+     * échouer bruyamment (pour ne jamais laisser passer une régression en
+     * silence) ; en production on journalise sans bloquer la requête
+     * (mieux vaut un member fonctionnel et audité qu'une panne totale).
+     */
+    public static function assertAccountConsistency(User $member, Collaborator $collaborator): void
+    {
+        if ($member->account_id === $collaborator->user_id) {
+            return;
+        }
+
+        $message = "Incohérence account_id : membre={$member->id} account_id={$member->account_id} "
+            . "vs collaborator={$collaborator->id} user_id={$collaborator->user_id}";
+
+        if (app()->environment(['local', 'testing'])) {
+            throw new \RuntimeException($message);
+        }
+
+        Log::error($message, [
+            'member_id' => $member->id,
+            'member_account_id' => $member->account_id,
+            'collaborator_id' => $collaborator->id,
+            'collaborator_user_id' => $collaborator->user_id,
+        ]);
     }
 
     public static function applyPermissionOverrides(User $member, array $overrides): void
