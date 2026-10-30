@@ -570,8 +570,13 @@ class TeamController extends Controller
 
         $query = ActivityLog::where('account_id', $accountId)->orderByDesc('created_at');
 
+        // L'activité d'une personne = ce qu'elle a FAIT (user_id) ET ce qu'on
+        // lui a fait (sujet : ajout, suspension, code régénéré…).
         if ($request->filled('member')) {
-            $query->where('user_id', $request->input('member'));
+            $member = (string) $request->input('member');
+            $query->where(function ($q) use ($member) {
+                $q->where('user_id', $member)->orWhere('subject_id', $member);
+            });
         }
 
         $total = (clone $query)->count();
@@ -579,7 +584,7 @@ class TeamController extends Controller
 
         return response()->json([
             'success' => true,
-            'data' => $logs,
+            'data' => $this->describeActivity($logs),
             'meta' => [
                 'total' => $total,
                 'page' => $page,
@@ -687,6 +692,57 @@ class TeamController extends Controller
             'sales_count' => $query()->count(),
             'total' => round((float) $query()->sum('total_amount'), 2),
         ];
+    }
+
+    /**
+     * Ajoute à chaque entrée du journal les noms dont le front a besoin pour
+     * écrire une phrase lisible (« Awa a suspendu Koffi », « A changé le prix
+     * de Robe wax ») : actor_name (auteur, ou son nom figé s'il a été
+     * supprimé) et subject_name (personne, article/variation, code
+     * d'opération). Chargés en lot, une requête par type.
+     */
+    private function describeActivity($logs): array
+    {
+        $userIds = $logs->pluck('user_id')
+            ->merge($logs->where('subject_type', User::class)->pluck('subject_id'))
+            ->filter()->unique()->values();
+        $users = User::whereIn('id', $userIds)->get(['id', 'first_name', 'last_name', 'username'])->keyBy('id');
+        $collaborators = Collaborator::whereIn('id', $logs->where('subject_type', User::class)->pluck('subject_id')->filter()->unique()->values())
+            ->get(['id', 'name'])->keyBy('id');
+
+        $articleIds = $logs->where('subject_type', \App\Models\Article::class)->pluck('subject_id')->filter()->unique()->values();
+        $articles = $articleIds->isEmpty() ? collect() : \App\Models\Article::whereIn('id', $articleIds)->get(['id', 'name'])->keyBy('id');
+        $variationIds = $logs->where('subject_type', \App\Models\Variation::class)->pluck('subject_id')->filter()->unique()->values();
+        $variations = $variationIds->isEmpty() ? collect() : \App\Models\Variation::withTrashed()->with('article:id,name')->whereIn('id', $variationIds)->get()->keyBy('id');
+
+        $nameOf = function (?User $user): ?string {
+            if (!$user) {
+                return null;
+            }
+            $name = trim(($user->first_name ?? '') . ' ' . ($user->last_name ?? ''));
+
+            return $name !== '' ? $name : $user->username;
+        };
+
+        return $logs->map(function (ActivityLog $log) use ($users, $collaborators, $articles, $variations, $nameOf) {
+            $details = $log->details ?? [];
+            $subjectName = match ($log->subject_type) {
+                User::class => $nameOf($users->get($log->subject_id))
+                    ?? $collaborators->get($log->subject_id)?->name
+                    ?? ($details['name'] ?? null),
+                \App\Models\Article::class => $articles->get($log->subject_id)?->name,
+                \App\Models\Variation::class => ($v = $variations->get($log->subject_id))
+                    ? trim(($v->article?->name ?? '') . ' ' . $v->name)
+                    : null,
+                Operation::class => $details['code'] ?? null,
+                default => null,
+            };
+
+            return array_merge($log->toArray(), [
+                'actor_name' => $nameOf($users->get($log->user_id)) ?? $log->user_name,
+                'subject_name' => $subjectName,
+            ]);
+        })->values()->all();
     }
 
     /**

@@ -785,11 +785,20 @@ test('GET /api/team/activity liste le journal, filtrable par membre', function (
     $all->assertOk();
     expect(count($all->json('data')))->toBeGreaterThanOrEqual(2);
 
+    // Activité d'un membre = ce qu'il a fait ET ce qu'on lui a fait (ici :
+    // suspendu puis réactivé par le propriétaire), avec les noms pour écrire
+    // « Suspendu par … ».
     $filtered = $this->actingAs($owner)->getJson('/api/team/activity?member=' . $member->id);
     $filtered->assertOk();
+    $actions = collect($filtered->json('data'))->pluck('action');
+    expect($actions)->toContain('team.member_suspended')->toContain('team.member_reactivated');
     foreach ($filtered->json('data') as $entry) {
-        expect($entry['user_id'])->toBe($member->id);
+        expect($entry['user_id'] === $member->id || $entry['subject_id'] === $member->id)->toBeTrue();
     }
+
+    $suspended = collect($filtered->json('data'))->firstWhere('action', 'team.member_suspended');
+    expect($suspended['actor_name'])->toBe('Propriétaire O');
+    expect($suspended['subject_name'])->toBe('Membre Cashier');
 });
 
 /*
