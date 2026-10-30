@@ -440,6 +440,23 @@ class AuthController extends Controller
         $user->setRelation('settings', UserSetting::where('user_id', $accountId)->first());
 
         $payload = $user->toArray();
+
+        // Totaux du COMPTE (articles, stock, ventes, solde…) : les accesseurs
+        // de User se calculent sur SES propres lignes (user_id = son id) —
+        // pour un membre, ce serait toujours 0 (valeur du stock à 0 pour le
+        // gestionnaire de stock, solde à 0 pour le gérant). On reprend ceux
+        // du propriétaire ; les champs financiers restent masqués plus bas
+        // pour qui n'a pas wallet.view_balance.
+        if ($user->isMember()) {
+            $account = User::find($accountId);
+            if ($account) {
+                $account->setRelation('settings', $user->settings);
+                foreach ($account->getAppends() as $field) {
+                    $payload[$field] = $account->{$field};
+                }
+            }
+        }
+
         $payload['is_owner'] = $user->isOwner();
         $payload['permissions'] = Permissions::effectivePermissions($user);
 

@@ -681,6 +681,29 @@ test('caissier : peut noter une dépense par défaut ; un ajustement par membre 
     ])->assertStatus(403);
 });
 
+test('GET /api/user d’un membre : totaux du COMPTE (valeur du stock, articles, ventes), jamais 0 ni ceux d’un autre compte', function () {
+    $owner = equipeOwner('S');
+    $otherOwner = equipeOwner('T');
+    Article::create(['user_id' => $owner->id, 'name' => 'Robe', 'sale_price' => 10000, 'quantity' => 5, 'type' => 'simple']);
+    Article::create(['user_id' => $otherOwner->id, 'name' => 'Autre', 'sale_price' => 99999, 'quantity' => 9, 'type' => 'simple']);
+    Transaction::create(['user_id' => $owner->id, 'name' => 'Vente', 'amount' => 7000, 'type' => 'sale']);
+
+    config(['auth.defaults.guard' => 'web']); app('auth')->forgetGuards();
+    $ownerPayload = $this->actingAs($owner)->getJson('/api/user')->assertOk()->json();
+    expect((float) $ownerPayload['total_stock_value'])->toBe(50000.0);
+
+    config(['auth.defaults.guard' => 'web']); app('auth')->forgetGuards();
+    $stock = $this->actingAs(equipeMember($owner, 'stock_manager'))->getJson('/api/user')->assertOk()->json();
+    expect((float) $stock['total_stock_value'])->toBe(50000.0);
+    expect($stock['total_articles'])->toBe(1);
+    expect($stock)->not->toHaveKey('total_sale'); // pas de wallet.view_balance : champs financiers masqués
+
+    config(['auth.defaults.guard' => 'web']); app('auth')->forgetGuards();
+    $manager = $this->actingAs(equipeMember($owner, 'manager'))->getJson('/api/user')->assertOk()->json();
+    expect((float) $manager['total_sale'])->toBe((float) $ownerPayload['total_sale']);
+    expect((float) $manager['total_sale'])->toBe(7000.0);
+});
+
 test('caissier : une dépense saisie via POST /api/transactions apparaît dans SES transactions et son solde du jour', function () {
     $owner = equipeOwner('C');
     $cashier = equipeMember($owner, 'cashier');
