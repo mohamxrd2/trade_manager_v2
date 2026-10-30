@@ -1210,3 +1210,18 @@ test('suppression définitive : jamais le propriétaire, jamais par un caissier,
     expect(User::find($victim->id))->not->toBeNull();
     expect(User::find($foreign->id))->not->toBeNull();
 });
+
+test('GET /api/team expose collaborator_id : id de la fiche associé, même quand l’associé a un accès', function () {
+    $owner = v2Owner('COLLAB_ID');
+    $partnerWithAccess = v2ActingAs($this, $owner)->postJson('/api/team', [
+        'name' => 'Associé Accès', 'is_partner' => true, 'share' => 10, 'has_access' => true, 'role' => 'manager',
+    ])->assertStatus(201)->json('data.team_member');
+
+    $rows = collect(v2ActingAs($this, $owner)->getJson('/api/team')->assertOk()->json('data'));
+
+    expect($rows->firstWhere('is_owner', true)['collaborator_id'])->toBeNull();
+    $row = $rows->firstWhere('id', $partnerWithAccess['id']);
+    expect($row['collaborator_id'])->not->toBeNull()->not->toBe($row['id']);
+    expect(Collaborator::find($row['collaborator_id'])?->name)->toBe('Associé Accès');
+});
+

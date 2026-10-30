@@ -706,6 +706,7 @@ class TeamController extends Controller
                 'email' => $owner->email,
                 'is_owner' => true,
                 'is_partner' => false,
+                'collaborator_id' => null,
                 'part' => null,
                 'part_amount' => null,
                 'access' => 'active',
@@ -733,6 +734,10 @@ class TeamController extends Controller
             'email' => $collaborator?->email ?? $accessUser?->email,
             'is_owner' => false,
             'is_partner' => $collaborator !== null,
+            // Id de la fiche associé — différent de `id` quand l'associé a
+            // aussi un accès (id = son compte) : le front s'en sert pour
+            // retrouver sa part calculée (même source que la répartition).
+            'collaborator_id' => $collaborator?->id,
             'part' => $collaborator ? (float) $collaborator->part : null,
             'part_amount' => $collaborator ? (float) $collaborator->wallet : null,
             'access' => $access,
