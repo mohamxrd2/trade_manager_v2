@@ -23,6 +23,7 @@ function createTeamEquipeV2TestSchema(): void
 {
     foreach ([
         'activity_logs', 'member_permissions', 'sessions', 'notifications', 'transactions',
+        'invoices', 'stock_replenishments', 'personal_access_tokens',
         'operations', 'operation_counters', 'collaborators', 'variations', 'articles',
         'user_settings', 'companies', 'users',
     ] as $table) {
@@ -141,6 +142,8 @@ function createTeamEquipeV2TestSchema(): void
         $table->uuid('id')->primary();
         $table->uuid('user_id');
         $table->uuid('created_by_user_id')->nullable();
+        $table->string('created_by_name')->nullable();
+        $table->string('created_by_role', 32)->nullable();
         $table->string('type');
         $table->string('code');
         $table->string('payment_method')->nullable();
@@ -204,13 +207,36 @@ function createTeamEquipeV2TestSchema(): void
     Schema::create('activity_logs', function (Blueprint $table) {
         $table->uuid('id')->primary();
         $table->uuid('account_id');
-        $table->uuid('user_id');
+        $table->uuid('user_id')->nullable();
+        $table->string('user_name')->nullable();
         $table->string('action');
         $table->string('subject_type')->nullable();
         $table->uuid('subject_id')->nullable();
         $table->json('details')->nullable();
         $table->timestamp('created_at')->useCurrent();
     });
+    // Seulement ce que touche la suppression définitive d'un membre
+    // (TeamService::deleteMemberPermanently()).
+    Schema::create('personal_access_tokens', function (Blueprint $table) {
+        $table->uuid('id')->primary();
+        $table->string('tokenable_type');
+        $table->uuid('tokenable_id');
+        $table->string('name');
+        $table->string('token', 64)->unique();
+        $table->text('abilities')->nullable();
+        $table->timestamp('last_used_at')->nullable();
+        $table->timestamp('expires_at')->nullable();
+        $table->timestamps();
+    });
+    foreach (['invoices', 'stock_replenishments'] as $table) {
+        Schema::create($table, function (Blueprint $table) {
+            $table->uuid('id')->primary();
+            $table->uuid('user_id');
+            $table->uuid('created_by_user_id')->nullable();
+            $table->string('created_by_name')->nullable();
+            $table->timestamps();
+        });
+    }
 }
 
 beforeEach(function () {
@@ -1098,4 +1124,89 @@ test('le refus 409 ACCOUNT_MISMATCH indique aussi le vrai compte de la session',
         ->postJson('/api/team', ['name' => 'X', 'has_access' => true, 'role' => 'cashier'], ['X-Account-Id' => $other->id])
         ->assertStatus(409)
         ->assertHeader('X-Account-Id', $owner->id);
+});
+
+/*
+|--------------------------------------------------------------------------
+| 11. Suppression DÉFINITIVE d'un membre — DELETE /api/team/{id}?permanent=1
+|--------------------------------------------------------------------------
+| Le compte et l'identifiant disparaissent ; ses ventes restent, avec SON
+| nom (jamais celui du propriétaire), y compris dans « Ventes par membre »
+| et le journal d'activité.
+*/
+
+test('suppression définitive : compte supprimé, ventes conservées avec son nom et son rôle', function () {
+    $owner = v2Owner('DEL_OK');
+    $member = v2Member($owner, 'cashier', ['first_name' => 'Koffi', 'last_name' => 'Yao']);
+
+    $sale = Operation::create([
+        'user_id' => $owner->id, 'created_by_user_id' => $member->id, 'type' => 'sale',
+        'code' => 'V-TEST-DEL1', 'payment_method' => 'especes', 'total_amount' => 7500, 'occurred_at' => now(),
+    ]);
+    Transaction::create([
+        'user_id' => $owner->id, 'operation_id' => $sale->id, 'name' => 'Vente', 'amount' => 7500, 'type' => 'sale',
+    ]);
+    \App\Models\ActivityLog::create([
+        'account_id' => $owner->id, 'user_id' => $member->id, 'action' => 'auth.member_login',
+    ]);
+
+    v2ActingAs($this, $owner)->deleteJson("/api/team/{$member->id}?permanent=1")->assertOk();
+
+    expect(User::find($member->id))->toBeNull();
+    expect(MemberPermission::where('user_id', $member->id)->count())->toBe(0);
+
+    $kept = Operation::find($sale->id);
+    expect($kept)->not->toBeNull();
+    expect($kept->created_by_user_id)->toBeNull();
+    expect($kept->created_by)->toBe(['id' => null, 'name' => 'Koffi Yao', 'role' => 'cashier']);
+    expect($kept->author_name)->toBe('Koffi Yao'); // ticket : « Caissier : Koffi Yao », pas le propriétaire
+
+    // Journal conservé (plus de CASCADE), avec le nom figé.
+    $log = \App\Models\ActivityLog::where('action', 'auth.member_login')->first();
+    expect($log)->not->toBeNull();
+    expect($log->user_id)->toBeNull();
+    expect(DB::table('activity_logs')->where('id', $log->id)->value('user_name'))->toBe('Koffi Yao');
+    expect(\App\Models\ActivityLog::where('action', 'team.member_deleted')->exists())->toBeTrue();
+
+    // « Ventes par membre » : toujours à son nom, pas fondues dans le propriétaire.
+    $byMember = collect((new \App\Services\AnalyticsSummaryService())->summary($owner->id, '30d')['by_member']);
+    $row = $byMember->firstWhere('name', 'Koffi Yao');
+    expect($row)->not->toBeNull();
+    expect((float) $row['amount'])->toBe(7500.0);
+    expect($byMember->firstWhere('user_id', $owner->id))->toBeNull();
+});
+
+test('suppression définitive : l’identifiant du membre redevient disponible', function () {
+    $owner = v2Owner('DEL_USERNAME');
+    $member = v2Member($owner, 'cashier', ['username' => 'AWACOUTURE-KOFFI-DEL']);
+
+    v2ActingAs($this, $owner)->deleteJson("/api/team/{$member->id}?permanent=1")->assertOk();
+
+    $again = v2Member($owner, 'cashier', ['username' => 'AWACOUTURE-KOFFI-DEL']);
+    expect($again->exists)->toBeTrue();
+});
+
+test('sans ?permanent, « Retirer » reste réversible : compte suspendu, pas supprimé', function () {
+    $owner = v2Owner('DEL_SOFT');
+    $member = v2Member($owner, 'cashier');
+
+    v2ActingAs($this, $owner)->deleteJson("/api/team/{$member->id}")->assertOk();
+
+    expect(User::find($member->id)?->status)->toBe('suspended');
+});
+
+test('suppression définitive : jamais le propriétaire, jamais par un caissier, jamais un membre d’un autre compte', function () {
+    $owner = v2Owner('DEL_GUARD');
+    $cashier = v2Member($owner, 'cashier');
+    $victim = v2Member($owner, 'cashier');
+    $otherOwner = v2Owner('DEL_GUARD_B');
+    $foreign = v2Member($otherOwner, 'cashier');
+
+    v2ActingAs($this, $owner)->deleteJson("/api/team/{$owner->id}?permanent=1")->assertStatus(403);
+    v2ActingAs($this, $cashier)->deleteJson("/api/team/{$victim->id}?permanent=1")->assertStatus(403);
+    v2ActingAs($this, $owner)->deleteJson("/api/team/{$foreign->id}?permanent=1")->assertStatus(404);
+
+    expect(User::find($owner->id))->not->toBeNull();
+    expect(User::find($victim->id))->not->toBeNull();
+    expect(User::find($foreign->id))->not->toBeNull();
 });

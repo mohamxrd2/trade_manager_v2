@@ -7,6 +7,8 @@ use App\Models\Company;
 use App\Models\MemberPermission;
 use App\Models\User;
 use App\Support\AccountCode;
+use App\Support\SessionRevoker;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Log;
 
@@ -179,5 +181,48 @@ class TeamService
                 ['granted' => $adjustment['granted']]
             );
         }
+    }
+
+    /**
+     * Nom affiché d'un utilisateur — « Prénom Nom », sinon son identifiant.
+     */
+    public static function displayName(User $user): ?string
+    {
+        $name = trim(($user->first_name ?? '') . ' ' . ($user->last_name ?? ''));
+
+        return $name !== '' ? $name : ($user->username ?? null);
+    }
+
+    /**
+     * Suppression DÉFINITIVE du compte d'un membre (jamais du propriétaire —
+     * vérifié par l'appelant). Ce qu'il a fait reste dans l'historique : son
+     * nom (et son rôle) est figé dans ses opérations, factures,
+     * réapprovisionnements et entrées du journal AVANT la suppression — les
+     * clés created_by_user_id / activity_logs.user_id passent ensuite à NULL
+     * (nullOnDelete). Ses sessions, ses ajustements de permissions et son
+     * identifiant disparaissent : l'identifiant redevient disponible.
+     * À appeler dans une transaction.
+     */
+    public static function deleteMemberPermanently(User $member): void
+    {
+        $name = self::displayName($member);
+
+        // created_by_user_id / user_id mis à NULL ici explicitement (et pas
+        // seulement par les clés nullOnDelete) : le nom figé et la référence
+        // effacée restent cohérents quel que soit le moteur de base.
+        DB::table('operations')->where('created_by_user_id', $member->id)
+            ->update(['created_by_name' => $name, 'created_by_role' => $member->role, 'created_by_user_id' => null]);
+        DB::table('invoices')->where('created_by_user_id', $member->id)
+            ->update(['created_by_name' => $name, 'created_by_user_id' => null]);
+        DB::table('stock_replenishments')->where('created_by_user_id', $member->id)
+            ->update(['created_by_name' => $name, 'created_by_user_id' => null]);
+        DB::table('activity_logs')->where('user_id', $member->id)
+            ->update(['user_name' => $name, 'user_id' => null]);
+
+        SessionRevoker::revoke($member->id);
+        $member->tokens()->delete();
+        MemberPermission::where('user_id', $member->id)->delete();
+
+        $member->delete();
     }
 }

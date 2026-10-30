@@ -89,6 +89,10 @@ class Operation extends Model
         // traite "createdBy" et "created_by" de façon identique, donc
         // getCreatedByAttribute() ci-dessous intercepterait sinon aussi
         // cet accès par __get().
+        if ($this->hasDeletedAuthor()) {
+            return $this->created_by_name;
+        }
+
         $author = $this->getRelationValue('createdBy') ?: $this->getRelationValue('user');
         if (!$author) {
             return null;
@@ -97,6 +101,16 @@ class Operation extends Model
         $name = trim(($author->first_name ?? '') . ' ' . ($author->last_name ?? ''));
 
         return $name !== '' ? $name : ($author->username ?? null);
+    }
+
+    /**
+     * Auteur supprimé définitivement (TeamService::deleteMemberPermanently()) :
+     * created_by_user_id est passé à NULL mais son nom a été figé dans
+     * created_by_name — ne JAMAIS retomber sur le propriétaire dans ce cas.
+     */
+    private function hasDeletedAuthor(): bool
+    {
+        return $this->created_by_user_id === null && $this->created_by_name !== null;
     }
 
     /**
@@ -112,6 +126,10 @@ class Operation extends Model
      */
     public function getCreatedByAttribute(): ?array
     {
+        if ($this->hasDeletedAuthor()) {
+            return ['id' => null, 'name' => $this->created_by_name, 'role' => $this->created_by_role];
+        }
+
         $author = $this->getRelationValue('createdBy') ?: $this->getRelationValue('user');
         if (!$author) {
             return null;

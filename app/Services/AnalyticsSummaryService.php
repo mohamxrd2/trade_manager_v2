@@ -395,21 +395,26 @@ class AnalyticsSummaryService
      */
     private function byMember(string $userId, Carbon $start, Carbon $end): array
     {
+        // Un membre supprimé définitivement n'a plus de created_by_user_id
+        // mais son nom figé (created_by_name) : ses ventes restent regroupées
+        // sous son nom, jamais fondues dans celles du propriétaire.
+        $deletedAuthor = 'CASE WHEN operations.created_by_user_id IS NULL THEN operations.created_by_name END';
         $rows = $this->baseQuery($userId, 'sale', $start, $end)
-            ->selectRaw('
-                COALESCE(operations.created_by_user_id, transactions.user_id) as member_id,
+            ->selectRaw("
+                CASE WHEN {$deletedAuthor} IS NULL THEN COALESCE(operations.created_by_user_id, transactions.user_id) END as member_id,
+                {$deletedAuthor} as deleted_name,
                 SUM(transactions.amount) as amount,
                 COUNT(DISTINCT COALESCE(transactions.operation_id, transactions.id)) as sales_count
-            ')
-            ->groupByRaw('COALESCE(operations.created_by_user_id, transactions.user_id)')
+            ")
+            ->groupByRaw("CASE WHEN {$deletedAuthor} IS NULL THEN COALESCE(operations.created_by_user_id, transactions.user_id) END, {$deletedAuthor}")
             ->get();
 
         $memberIds = $rows->pluck('member_id')->filter()->unique()->values()->all();
         $users = User::whereIn('id', $memberIds)->get(['id', 'first_name', 'last_name', 'username'])->keyBy('id');
 
         return $rows->map(function ($row) use ($users) {
-            $user = $users->get($row->member_id);
-            $name = $user ? trim(($user->first_name ?? '') . ' ' . ($user->last_name ?? '')) : null;
+            $user = $row->member_id ? $users->get($row->member_id) : null;
+            $name = $user ? trim(($user->first_name ?? '') . ' ' . ($user->last_name ?? '')) : $row->deleted_name;
             $amount = (float) $row->amount;
             $salesCount = (int) $row->sales_count;
 

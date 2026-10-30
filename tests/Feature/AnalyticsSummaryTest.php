@@ -59,6 +59,8 @@ function createAnalyticsSummaryTestSchema(): void
         $table->uuid('id')->primary();
         $table->uuid('user_id');
         $table->uuid('created_by_user_id')->nullable();
+        $table->string('created_by_name')->nullable();
+        $table->string('created_by_role', 32)->nullable();
         $table->string('type');
         $table->string('code');
         $table->string('payment_method')->nullable();

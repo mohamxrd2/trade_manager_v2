@@ -486,7 +486,7 @@ class TeamController extends Controller
      * personne est associée, retire sa part (mêmes règles que
      * CollaboratorController::destroy()).
      */
-    public function destroy(string $id): JsonResponse
+    public function destroy(Request $request, string $id): JsonResponse
     {
         $accountId = CurrentAccount::id();
 
@@ -501,8 +501,22 @@ class TeamController extends Controller
         $accessUser = $resolved['user'];
         $collaborator = $resolved['collaborator'];
 
-        return DB::transaction(function () use ($accountId, $accessUser, $collaborator) {
-            if ($accessUser) {
+        // ?permanent=1 : supprime AUSSI le compte de connexion du membre (son
+        // identifiant est libéré). Sans ce paramètre, l'accès est seulement
+        // désactivé (réversible). Dans les deux cas, ses ventes restent.
+        $permanent = $request->boolean('permanent');
+
+        return DB::transaction(function () use ($accountId, $accessUser, $collaborator, $permanent) {
+            if ($accessUser && $permanent) {
+                $memberName = TeamService::displayName($accessUser);
+                $memberId = $accessUser->id;
+                if ($collaborator) {
+                    $collaborator->update(['user_id_member' => null]);
+                }
+                TeamService::deleteMemberPermanently($accessUser);
+                ActivityLogger::log(Auth::id(), 'team.member_deleted', User::class, $memberId, ['name' => $memberName]);
+                $accessUser = null;
+            } elseif ($accessUser) {
                 $accessUser->update(['status' => 'suspended']);
                 SessionRevoker::revoke($accessUser->id);
             }
@@ -515,9 +529,14 @@ class TeamController extends Controller
                 $owner->save();
             }
 
-            ActivityLogger::log(Auth::id(), 'team.person_removed', User::class, $accessUser?->id ?? $collaborator?->id);
+            if (!$permanent || $collaborator) {
+                ActivityLogger::log(Auth::id(), 'team.person_removed', User::class, $accessUser?->id ?? $collaborator?->id);
+            }
 
-            return response()->json(['success' => true, 'message' => "Retiré de l'équipe avec succès"]);
+            return response()->json([
+                'success' => true,
+                'message' => $permanent ? 'Compte du membre supprimé définitivement' : "Retiré de l'équipe avec succès",
+            ]);
         });
     }
 
