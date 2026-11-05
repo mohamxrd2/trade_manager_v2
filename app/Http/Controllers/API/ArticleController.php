@@ -38,7 +38,11 @@ class ArticleController extends Controller
                 }])
                 ->with('user.settings') // Charger les settings pour le calcul de low_stock
                 ->orderBy('created_at', 'desc')
-                ->get();
+                ->get()
+                // user.settings ne sert qu'au calcul de low_stock (attribut
+                // ajouté) : sans makeHidden, le compte et ses réglages
+                // étaient recopiés dans CHAQUE article (> la moitié du JSON).
+                ->each->makeHidden('user');
 
             return response()->json([
                 'success' => true,
