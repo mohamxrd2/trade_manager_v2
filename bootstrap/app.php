@@ -30,6 +30,10 @@ return Application::configure(basePath: dirname(__DIR__))
             \Laravel\Sanctum\Http\Middleware\EnsureFrontendRequestsAreStateful::class,
         ]);
 
+        // sendBeacon (Core Web Vitals) ne peut pas joindre de jeton CSRF ;
+        // la route n'écrit que des mesures anonymes, limitée en débit.
+        $middleware->validateCsrfTokens(except: ['api/web-vitals']);
+
         // Alias pour les middlewares personnalisés
         $middleware->alias([
             'company.ready' => \App\Http\Middleware\EnsureCompanyInvoiceReady::class,

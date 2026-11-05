@@ -35,6 +35,9 @@ use Illuminate\Support\Facades\Route;
 // Public routes (no authentication required)
 // Note: La route /sanctum/csrf-cookie est gérée automatiquement par Sanctum
 
+// Core Web Vitals des vrais utilisateurs (sendBeacon depuis le front).
+Route::post('/web-vitals', [\App\Http\Controllers\API\WebVitalsController::class, 'store'])->middleware('throttle:60,1');
+
 Route::post('/register', [AuthController::class, 'register'])->middleware('throttle:6,1');
 Route::post('/register/verify', [AuthController::class, 'verifyRegistration'])->middleware('throttle:10,1');
 Route::post('/register/resend-code', [AuthController::class, 'resendRegistrationCode'])->middleware('throttle:3,1');
