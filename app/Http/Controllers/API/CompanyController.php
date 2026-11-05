@@ -7,6 +7,7 @@ use App\Models\Company;
 use App\Support\CurrentAccount;
 use App\Support\Permissions;
 use Illuminate\Http\JsonResponse;
+use App\Services\LogoOptimizer;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Storage;
@@ -159,10 +160,7 @@ class CompanyController extends Controller
 
                 // Générer un nom unique pour le fichier
                 $file = $request->file('logo');
-                $filename = 'company_' . $company->id . '_' . time() . '.' . $file->getClientOriginalExtension();
-                
-                // Stocker le nouveau logo
-                $path = $file->storeAs('company-logos', $filename, 'public');
+                $path = LogoOptimizer::store($file, 'company-logos', 'company_' . $company->id . '_' . time());
                 $company->logo = $path;
             }
 
@@ -303,8 +301,7 @@ class CompanyController extends Controller
                 }
 
                 $file = $request->file('logo');
-                $filename = 'company_' . $company->id . '_' . time() . '.' . $file->getClientOriginalExtension();
-                $path = $file->storeAs('company-logos', $filename, 'public');
+                $path = LogoOptimizer::store($file, 'company-logos', 'company_' . $company->id . '_' . time());
                 $company->logo = $path;
             }
 
@@ -369,8 +366,7 @@ class CompanyController extends Controller
 
             // Stocker le nouveau logo
             $file = $request->file('logo');
-            $filename = 'company_' . $company->id . '_' . time() . '.' . $file->getClientOriginalExtension();
-            $path = $file->storeAs('company-logos', $filename, 'public');
+            $path = LogoOptimizer::store($file, 'company-logos', 'company_' . $company->id . '_' . time());
             
             $company->logo = $path;
             $company->save();

@@ -28,9 +28,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 #
 # Vérifié par ldd sur gd.so/pdo_pgsql.so/zip.so/intl.so/mbstring.so : chaque
 # lib dynamique requise à l'exécution (libpq5, libzip5, libicu76, libpng16,
-# libjpeg62-turbo, libfreetype6, libonig5) est un paquet SÉPARÉ des *-dev
+# libjpeg62-turbo, libfreetype6, libwebp7, libonig5) est un paquet SÉPARÉ des *-dev
 # (ex: libpq-dev dépend de libpq5, pas l'inverse) — purger uniquement les
 # *-dev, sans --autoremove, laisse ces libs runtime intactes.
+# gd --with-webp : les logos d'entreprise peuvent être en WebP (accepté à
+# l'envoi, et format de conversion des logos) — sans lui, DomPDF ne peut pas
+# lire un logo WebP et la génération du PDF de facture échoue.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         libpq-dev \
         libzip-dev \
@@ -38,8 +41,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libpng-dev \
         libjpeg62-turbo-dev \
         libfreetype6-dev \
+        libwebp-dev \
         libonig-dev \
-    && docker-php-ext-configure gd --with-freetype --with-jpeg \
+    && docker-php-ext-configure gd --with-freetype --with-jpeg --with-webp \
     && docker-php-ext-install -j$(nproc) \
         pdo \
         pdo_pgsql \
@@ -56,6 +60,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libpng-dev \
         libjpeg62-turbo-dev \
         libfreetype6-dev \
+        libwebp-dev \
         libonig-dev \
     && rm -rf /var/lib/apt/lists/*
 
