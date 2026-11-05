@@ -74,12 +74,7 @@ class AuthController extends Controller
             'expires_at' => now()->addMinutes(self::CODE_TTL_MINUTES)->timestamp,
         ], now()->addMinutes(self::CODE_TTL_MINUTES + 5));
 
-        if (!$this->sendVerificationCode($request->email, $code, $request->first_name)) {
-            return response()->json([
-                'success' => false,
-                'message' => "L'envoi de l'email de vérification a échoué. Veuillez réessayer.",
-            ], 502);
-        }
+        $this->sendVerificationCode($request->email, $code, $request->first_name);
 
         return response()->json([
             'success' => true,
@@ -211,12 +206,7 @@ class AuthController extends Controller
 
         Cache::put($key, $pending, now()->addMinutes(self::CODE_TTL_MINUTES + 5));
 
-        if (!$this->sendVerificationCode($pending['email'], $code, $pending['first_name'])) {
-            return response()->json([
-                'success' => false,
-                'message' => "L'envoi de l'email de vérification a échoué. Veuillez réessayer.",
-            ], 502);
-        }
+        $this->sendVerificationCode($pending['email'], $code, $pending['first_name']);
 
         return response()->json([
             'success' => true,
@@ -237,24 +227,24 @@ class AuthController extends Controller
     }
 
     /**
-     * Envoie l'email de vérification. Retourne false (au lieu de laisser
-     * l'exception remonter) si l'envoi échoue, pour ne jamais exposer les
-     * détails internes du transport mail au client.
+     * Envoie l'email de vérification APRÈS la réponse HTTP (afterResponse) :
+     * l'inscription répond tout de suite au lieu d'attendre Resend (1 à 3 s).
+     * Pas de worker de queue à faire tourner : le même process PHP-FPM
+     * envoie le mail une fois la réponse partie. Un échec est journalisé ;
+     * l'utilisateur peut redemander un code (« Renvoyer le code »).
      */
-    private function sendVerificationCode(string $email, string $code, string $firstName): bool
+    private function sendVerificationCode(string $email, string $code, string $firstName): void
     {
-        try {
-            Mail::to($email)->send(new RegistrationVerificationCode($code, $firstName));
-
-            return true;
-        } catch (\Throwable $e) {
-            Log::error('Échec envoi email de vérification', [
-                'email' => $email,
-                'error' => $e->getMessage(),
-            ]);
-
-            return false;
-        }
+        dispatch(function () use ($email, $code, $firstName) {
+            try {
+                Mail::to($email)->send(new RegistrationVerificationCode($code, $firstName));
+            } catch (\Throwable $e) {
+                Log::error('Échec envoi email de vérification', [
+                    'email' => $email,
+                    'error' => $e->getMessage(),
+                ]);
+            }
+        })->afterResponse();
     }
 
     /**
@@ -359,12 +349,7 @@ class AuthController extends Controller
                 'expires_at' => now()->addMinutes(self::CODE_TTL_MINUTES)->timestamp,
             ], now()->addMinutes(self::CODE_TTL_MINUTES + 5));
 
-            if (!$this->sendVerificationCode($user->email, $code, $user->first_name)) {
-                return response()->json([
-                    'success' => false,
-                    'message' => "L'envoi de l'email de vérification a échoué. Veuillez réessayer.",
-                ], 502);
-            }
+            $this->sendVerificationCode($user->email, $code, $user->first_name);
 
             return response()->json([
                 'success' => false,
