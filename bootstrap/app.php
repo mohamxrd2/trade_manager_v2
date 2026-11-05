@@ -30,6 +30,11 @@ return Application::configure(basePath: dirname(__DIR__))
             \Laravel\Sanctum\Http\Middleware\EnsureFrontendRequestsAreStateful::class,
         ]);
 
+        // Journalise les requêtes API lentes (durée, SQL) — voir LogSlowRequests.
+        $middleware->api(append: [
+            \App\Http\Middleware\LogSlowRequests::class,
+        ]);
+
         // sendBeacon (Core Web Vitals) ne peut pas joindre de jeton CSRF ;
         // la route n'écrit que des mesures anonymes, limitée en débit.
         $middleware->validateCsrfTokens(except: ['api/web-vitals']);

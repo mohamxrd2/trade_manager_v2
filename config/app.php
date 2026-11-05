@@ -135,4 +135,10 @@ return [
         'store' => env('APP_MAINTENANCE_STORE', 'database'),
     ],
 
+    /*
+    | Seuil (ms) au-delà duquel une requête API est journalisée
+    | (« Slow request », App\Http\Middleware\LogSlowRequests).
+    */
+    'slow_request_ms' => (int) env('SLOW_REQUEST_MS', 800),
+
 ];
