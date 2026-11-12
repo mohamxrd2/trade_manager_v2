@@ -12,6 +12,7 @@ use App\Http\Controllers\API\MeController;
 use App\Http\Controllers\API\NotificationController;
 use App\Http\Controllers\API\OnboardingController;
 use App\Http\Controllers\API\OperationController;
+use App\Http\Controllers\API\PasswordResetController;
 use App\Http\Controllers\API\SocialAuthController;
 use App\Http\Controllers\API\TeamController;
 use App\Http\Controllers\API\TransactionController;
@@ -42,6 +43,8 @@ Route::post('/register', [AuthController::class, 'register'])->middleware('throt
 Route::post('/register/verify', [AuthController::class, 'verifyRegistration'])->middleware('throttle:10,1');
 Route::post('/register/resend-code', [AuthController::class, 'resendRegistrationCode'])->middleware('throttle:3,1');
 Route::post('/login', [AuthController::class, 'login'])->middleware('throttle:8,1');
+Route::post('/password/forgot', [PasswordResetController::class, 'forgot'])->middleware('throttle:3,1');
+Route::post('/password/reset', [PasswordResetController::class, 'reset'])->middleware('throttle:10,1');
 
 // Health check route - Pour vérifier que le serveur est actif
 Route::get('/health', [HealthController::class, 'check']);
