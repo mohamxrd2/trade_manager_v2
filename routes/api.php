@@ -43,7 +43,9 @@ Route::post('/register', [AuthController::class, 'register'])->middleware('throt
 Route::post('/register/verify', [AuthController::class, 'verifyRegistration'])->middleware('throttle:10,1');
 Route::post('/register/resend-code', [AuthController::class, 'resendRegistrationCode'])->middleware('throttle:3,1');
 Route::post('/login', [AuthController::class, 'login'])->middleware('throttle:8,1');
-Route::post('/password/forgot', [PasswordResetController::class, 'forgot'])->middleware('throttle:3,1');
+// Mot de passe oublié — limites par e-mail et par IP dans le contrôleur.
+Route::post('/password/forgot', [PasswordResetController::class, 'forgot'])->middleware('throttle:10,1');
+Route::post('/password/verify', [PasswordResetController::class, 'verify'])->middleware('throttle:10,1');
 Route::post('/password/reset', [PasswordResetController::class, 'reset'])->middleware('throttle:10,1');
 
 // Health check route - Pour vérifier que le serveur est actif

@@ -1,25 +1,10 @@
-<!DOCTYPE html>
-<html lang="fr">
-<head>
-    <meta charset="utf-8">
-    <title>Réinitialisation de votre mot de passe</title>
-</head>
-<body style="font-family: Arial, sans-serif; background-color: #f4f4f5; padding: 32px 0; margin: 0;">
-    <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
-        <tr>
-            <td align="center">
-                <table role="presentation" width="480" cellpadding="0" cellspacing="0" style="background-color: #ffffff; border-radius: 8px; padding: 32px;">
-                    <tr>
-                        <td>
-                            <p style="font-size: 16px; color: #18181b;">Bonjour {{ $firstName }},</p>
-                            <p style="font-size: 16px; color: #18181b;">Voici votre code pour choisir un nouveau mot de passe :</p>
-                            <p style="font-size: 32px; font-weight: bold; letter-spacing: 8px; text-align: center; color: #18181b; margin: 32px 0;">{{ $code }}</p>
-                            <p style="font-size: 14px; color: #71717a;">Ce code expire dans 10 minutes. Si vous n'êtes pas à l'origine de cette demande, ignorez cet email : votre mot de passe ne change pas.</p>
-                        </td>
-                    </tr>
-                </table>
-            </td>
-        </tr>
-    </table>
-</body>
-</html>
+@include('emails._layout-start', ['title' => __('password_reset.code_subject', ['code' => $code])])
+<p style="margin:0 0 16px;">{{ __('password_reset.code_greeting', ['name' => $firstName]) }}</p>
+@if ($socialProvider)
+<p style="margin:0 0 16px; padding:12px 14px; border-radius:12px; background-color:#F4F1FF; color:#3A20B8; font-size:14px;">{{ __('password_reset.code_social', ['provider' => $socialProvider]) }}</p>
+@endif
+<p style="margin:0 0 8px;">{{ __('password_reset.code_intro') }}</p>
+<p style="margin:24px 0; font-size:36px; font-weight:800; letter-spacing:10px; text-align:center; color:#3A20B8;">{{ $code }}</p>
+<p style="margin:0 0 12px; font-size:14px; color:#4B4B5C;">{{ __('password_reset.code_validity', ['minutes' => $validMinutes]) }}</p>
+<p style="margin:0; font-size:14px; color:#6B6B7B;">{{ __('password_reset.code_ignore') }}</p>
+@include('emails._layout-end')
