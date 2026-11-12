@@ -47,6 +47,9 @@ class MediaController extends Controller
 
         $kind = $request->input('kind');
         $ownerId = $request->input('owner_id');
+        if ($ownerId === 'me') {
+            $ownerId = null; // sa propre photo de profil
+        }
         $accountId = CurrentAccount::id();
         $this->media->pruneOrphans($accountId);
 

@@ -290,7 +290,7 @@ it('laisse un membre avec stock.edit changer la photo, et chacun sa propre photo
     $cashier = mediaMember($owner, 'cashier', ['stock.edit' => false]);
 
     mediaUpload($this, $manager, mediaJpeg(400, 400), 'product', $article->id)->assertCreated();
-    mediaUpload($this, $cashier, mediaJpeg(400, 400), 'avatar')->assertCreated();
+    mediaUpload($this, $cashier, mediaJpeg(400, 400), 'avatar', 'me')->assertCreated();
 
     expect($article->fresh()->image_media_id)->not->toBeNull();
     expect($cashier->fresh()->avatar_media_id)->not->toBeNull();
