@@ -1133,7 +1133,7 @@ class InvoiceController extends Controller
         return [
             'invoice' => $invoice,
             'company' => $invoice->company,
-            'logoDataUri' => $this->logoDataUri($invoice->company->logo),
+            'logoDataUri' => $this->logoDataUri($invoice->company),
             'money' => fn (float $amount) => Invoice::formatMoney($amount, $currency),
             't' => $t,
             'statusLabel' => $t['status_' . $invoice->status] ?? ucfirst($invoice->status),
@@ -1141,19 +1141,35 @@ class InvoiceController extends Controller
     }
 
     /**
-     * Encode le logo de l'entreprise en data URI base64, lu directement
-     * depuis le disque (pas via une requête HTTP — voir config/dompdf.php).
+     * Encode le logo de l'entreprise en data URI, lu directement depuis le
+     * stockage (pas via une requête HTTP — voir config/dompdf.php). Converti
+     * en PNG : le logo hébergé est en WebP, que dompdf ne lit pas partout.
      */
-    private function logoDataUri(?string $logoPath): ?string
+    private function logoDataUri(?\App\Models\Company $company): ?string
     {
-        if (!$logoPath || !Storage::disk('public')->exists($logoPath)) {
+        if (!$company || !$company->logo) {
             return null;
         }
 
-        $mimeType = Storage::disk('public')->mimeType($logoPath) ?: 'image/png';
-        $contents = Storage::disk('public')->get($logoPath);
+        $contents = null;
+        if ($company->logo_media_id && ($media = \App\Models\Media::find($company->logo_media_id))) {
+            $contents = app(\App\Services\MediaService::class)->contents($media);
+        } elseif (!str_starts_with($company->logo, 'http') && Storage::disk('public')->exists($company->logo)) {
+            $contents = Storage::disk('public')->get($company->logo);
+        }
+        if (!$contents) {
+            return null;
+        }
 
-        return "data:{$mimeType};base64," . base64_encode($contents);
+        $image = @imagecreatefromstring($contents);
+        if (!$image) {
+            return null;
+        }
+        imagesavealpha($image, true);
+        ob_start();
+        imagepng($image);
+
+        return 'data:image/png;base64,' . base64_encode((string) ob_get_clean());
     }
 
     /**

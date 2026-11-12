@@ -7,7 +7,7 @@ use App\Models\Company;
 use App\Support\CurrentAccount;
 use App\Support\Permissions;
 use Illuminate\Http\JsonResponse;
-use App\Services\LogoOptimizer;
+use App\Services\MediaService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Storage;
@@ -153,15 +153,7 @@ class CompanyController extends Controller
 
             // Traiter l'upload du logo
             if ($request->hasFile('logo')) {
-                // Supprimer l'ancien logo s'il existe
-                if ($company->logo) {
-                    Storage::disk('public')->delete($company->logo);
-                }
-
-                // Générer un nom unique pour le fichier
-                $file = $request->file('logo');
-                $path = LogoOptimizer::store($file, 'company-logos', 'company_' . $company->id . '_' . time());
-                $company->logo = $path;
+                $this->storeLogo($company, $request->file('logo'));
             }
 
             // Mettre à jour l'email si fourni
@@ -295,14 +287,7 @@ class CompanyController extends Controller
 
             // Traiter l'upload du logo si présent
             if ($request->hasFile('logo')) {
-                // Supprimer l'ancien logo s'il existe
-                if ($company->logo) {
-                    Storage::disk('public')->delete($company->logo);
-                }
-
-                $file = $request->file('logo');
-                $path = LogoOptimizer::store($file, 'company-logos', 'company_' . $company->id . '_' . time());
-                $company->logo = $path;
+                $this->storeLogo($company, $request->file('logo'));
             }
 
             $company->save();
@@ -359,17 +344,8 @@ class CompanyController extends Controller
                 ], 422);
             }
 
-            // Supprimer l'ancien logo s'il existe
-            if ($company->logo) {
-                Storage::disk('public')->delete($company->logo);
-            }
-
-            // Stocker le nouveau logo
-            $file = $request->file('logo');
-            $path = LogoOptimizer::store($file, 'company-logos', 'company_' . $company->id . '_' . time());
-            
-            $company->logo = $path;
-            $company->save();
+            $this->storeLogo($company, $request->file('logo'));
+            $company->refresh();
 
             return response()->json([
                 'success' => true,
@@ -416,11 +392,8 @@ class CompanyController extends Controller
                 ], 404);
             }
 
-            // Supprimer le fichier
-            Storage::disk('public')->delete($company->logo);
-            
-            $company->logo = null;
-            $company->save();
+            $this->deleteLegacyLogoFile($company);
+            app(MediaService::class)->detach([[$company, 'logo_media_id', 'logo']]);
 
             return response()->json([
                 'success' => true,
@@ -432,6 +405,27 @@ class CompanyController extends Controller
                 'message' => 'Erreur lors de la suppression du logo',
                 'error' => $e->getMessage()
             ], 500);
+        }
+    }
+
+    /**
+     * Logo envoyé par les anciens écrans (multipart « logo ») : même chemin
+     * que POST /api/media — WebP 512 px sur le disque « media » (R2 en
+     * production ; le disque local de Render est effacé à chaque déploiement).
+     */
+    private function storeLogo(Company $company, \Illuminate\Http\UploadedFile $file): void
+    {
+        $media = app(MediaService::class);
+        $stored = $media->upload($file, 'logo', $company->user_id, Auth::id());
+        $this->deleteLegacyLogoFile($company);
+        $media->attach($stored, 'company', $company->id, [[$company, 'logo_media_id', 'logo']]);
+    }
+
+    /** Ancien logo stocké sur le disque « public » (chemin, pas une URL). */
+    private function deleteLegacyLogoFile(Company $company): void
+    {
+        if (!$company->logo_media_id && $company->logo && !str_starts_with($company->logo, 'http')) {
+            Storage::disk('public')->delete($company->logo);
         }
     }
 }

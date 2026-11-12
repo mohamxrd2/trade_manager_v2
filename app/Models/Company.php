@@ -93,6 +93,12 @@ class Company extends Model
             return null;
         }
 
+        // Logo hébergé (disque « media ») : la colonne porte déjà l'URL publique.
+        if (str_starts_with($this->logo, 'http://') || str_starts_with($this->logo, 'https://') || str_starts_with($this->logo, '/')) {
+            return $this->logo;
+        }
+
+        // Ancien logo sur le disque « public ».
         return asset('storage/' . $this->logo);
     }
 }

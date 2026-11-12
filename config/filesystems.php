@@ -47,6 +47,33 @@ return [
             'report' => false,
         ],
 
+        /*
+        | Images de Waelly (articles, variations, logos, photos de profil) —
+        | toujours via App\Services\MediaService. Cloudflare R2 dès que
+        | MEDIA_DISK_BUCKET est défini, sinon stockage local
+        | (storage/app/public/media, servi par /storage) pour développer.
+        */
+        'media' => env('MEDIA_DISK_BUCKET') ? [
+            'driver' => 's3',
+            'key' => env('MEDIA_DISK_KEY'),
+            'secret' => env('MEDIA_DISK_SECRET'),
+            'region' => env('MEDIA_DISK_REGION', 'auto'),
+            'bucket' => env('MEDIA_DISK_BUCKET'),
+            'endpoint' => env('MEDIA_DISK_ENDPOINT'),
+            'url' => env('MEDIA_DISK_URL'),
+            'use_path_style_endpoint' => true,
+            'visibility' => 'public',
+            'throw' => true,
+            'report' => false,
+        ] : [
+            'driver' => 'local',
+            'root' => storage_path('app/public/media'),
+            'url' => rtrim((string) env('APP_URL'), '/').'/storage/media',
+            'visibility' => 'public',
+            'throw' => true,
+            'report' => false,
+        ],
+
         's3' => [
             'driver' => 's3',
             'key' => env('AWS_ACCESS_KEY_ID'),
