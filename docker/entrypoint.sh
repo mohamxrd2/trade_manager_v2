@@ -23,6 +23,17 @@ php artisan config:cache
 php artisan route:cache
 php artisan view:cache
 
+echo "[entrypoint] Origines CORS pour les erreurs Nginx"
+# Même liste que Laravel (config/cors.php, déjà en cache ci-dessus).
+php artisan cors:nginx-map --output=/etc/nginx/cors-origins.map
+cat /etc/nginx/cors-origins.map
+# Jamais de démarrage bloqué pour ça : fichier invalide → table vide (les
+# erreurs Nginx n'auront simplement pas d'en-têtes CORS).
+if ! nginx -t 2>/dev/null; then
+    echo "[entrypoint] ATTENTION : table CORS invalide pour Nginx, ignorée"
+    : > /etc/nginx/cors-origins.map
+fi
+
 echo "[entrypoint] Migrations"
 php artisan migrate --force
 
