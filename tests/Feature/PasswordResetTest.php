@@ -125,6 +125,13 @@ beforeEach(function () {
     Mail::fake();
 });
 
+// La table vient de la vraie migration (clé étrangère vers users comprise) :
+// la retirer après chaque test, sinon les autres fichiers ne peuvent plus
+// supprimer users sur Postgres.
+afterEach(function () {
+    Schema::dropIfExists('password_reset_codes');
+});
+
 function prUser(array $attrs = []): User
 {
     $id = (string) Str::uuid();

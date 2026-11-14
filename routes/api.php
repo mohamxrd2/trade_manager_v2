@@ -49,7 +49,10 @@ Route::post('/password/verify', [PasswordResetController::class, 'verify'])->mid
 Route::post('/password/reset', [PasswordResetController::class, 'reset'])->middleware('throttle:10,1');
 
 // Health check route - Pour vérifier que le serveur est actif
-Route::get('/health', [HealthController::class, 'check']);
+// Sans session (le pilote de session est en base) : ne touche jamais la base.
+Route::get('/health', [HealthController::class, 'check'])
+    ->withoutMiddleware([\Laravel\Sanctum\Http\Middleware\EnsureFrontendRequestsAreStateful::class]);
+Route::get('/health/db', [HealthController::class, 'database'])->middleware('throttle:30,1');
 
 // Debug routes (test-db, test-cors) - Uniquement disponibles hors production
 // pour éviter d'exposer des informations internes (driver DB, config CORS, etc.)

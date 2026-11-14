@@ -18,6 +18,9 @@ return Application::configure(basePath: dirname(__DIR__))
         health: '/up',
     )
     ->withMiddleware(function (Middleware $middleware): void {
+        // Identifiant de requête sur toute réponse, erreurs comprises (voir AssignRequestId).
+        $middleware->prepend(\App\Http\Middleware\AssignRequestId::class);
+
         // Middleware pour les routes API
         $middleware->api(prepend: [
             // 1. Force les réponses JSON (doit être en premier)

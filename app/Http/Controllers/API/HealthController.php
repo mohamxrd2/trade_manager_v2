@@ -21,6 +21,21 @@ class HealthController extends Controller
      */
     public function check(): JsonResponse
     {
+        // Volontairement sans base de données : le front l'appelle à
+        // l'ouverture de la connexion pour réveiller le serveur, et un
+        // service de surveillance peut l'appeler souvent sans coût.
+        return response()->json([
+            'success' => true,
+            'status' => 'ok',
+            'timestamp' => now()->toIso8601String(),
+        ]);
+    }
+
+    /**
+     * GET /api/health/db — état de la base de données (diagnostic).
+     */
+    public function database(): JsonResponse
+    {
         $dbConnected = false;
         $dbError = null;
 
@@ -28,19 +43,14 @@ class HealthController extends Controller
             DB::connection()->getPdo();
             $dbConnected = true;
         } catch (\Exception $e) {
-            $dbError = $e->getMessage();
+            $dbError = app()->environment('production') ? 'unavailable' : $e->getMessage();
         }
 
         return response()->json([
-            'success' => true,
-            'status' => 'ok',
-            'timestamp' => now()->toIso8601String(),
-            'services' => [
-                'api' => true,
-                'database' => $dbConnected,
-            ],
+            'success' => $dbConnected,
+            'services' => ['api' => true, 'database' => $dbConnected],
             'database_error' => $dbError,
-        ]);
+        ], $dbConnected ? 200 : 503);
     }
 
     /**

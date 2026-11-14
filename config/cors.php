@@ -55,10 +55,9 @@ return [
     | (ex: variante "www.").
     | ⚠️ En production, NE JAMAIS utiliser '*' avec supports_credentials=true
     */
-    'allowed_origins' => array_filter(array_merge(
-        [env('FRONTEND_URL')],
-        array_filter(explode(',', (string) env('ADDITIONAL_CORS_ORIGINS', '')))
-    )),
+    // Liste unique, voir App\Support\FrontendOrigins (CORS_ALLOWED_ORIGINS,
+    // variante www. ajoutée d'office, localhost en local seulement).
+    'allowed_origins' => \App\Support\FrontendOrigins::origins(),
 
     /*
     |--------------------------------------------------------------------------
@@ -67,12 +66,10 @@ return [
     | Permet d'autoriser des domaines via des patterns regex.
     | Utile pour les environnements de preview (Vercel, Netlify, etc.)
     */
-    'allowed_origins_patterns' => [
-        // Vercel preview deployments
-        '#^https://.*\.vercel\.app$#',
-        // Netlify preview deployments  
-        '#^https://.*\.netlify\.app$#',
-    ],
+    // Previews Vercel de CE projet seulement (CORS_VERCEL_PROJECT +
+    // CORS_VERCEL_SCOPE) — jamais tout *.vercel.app : n'importe qui peut y
+    // héberger un site, et les cookies de session sont autorisés.
+    'allowed_origins_patterns' => \App\Support\FrontendOrigins::patterns(),
 
     /*
     |--------------------------------------------------------------------------
@@ -99,6 +96,13 @@ return [
         // EnsureAccountHeaderMatchesSession) — même raison : sans lui ici, le
         // préflight échoue et TOUTES les écritures du navigateur sont bloquées.
         'X-Account-Id',
+        // Langue de l'appli (messages d'erreur traduits).
+        'Accept-Language',
+        // Identifiant de requête envoyé par le front (retrouver une requête
+        // dans les logs à partir du message d'erreur).
+        'X-Request-Id',
+        // Toute nouvelle entrée doit aussi figurer dans le front
+        // (lib/api-headers.ts) : un test compare les deux listes.
     ],
 
     /*
@@ -116,6 +120,8 @@ return [
         // Compte de la session, comparé par le front au compte affiché par
         // l'onglet (voir EnsureAccountHeaderMatchesSession).
         'X-Account-Id',
+        // Identifiant de la requête (affiché dans les messages d'erreur).
+        'X-Request-Id',
     ],
 
     /*

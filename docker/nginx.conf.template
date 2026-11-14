@@ -1,3 +1,48 @@
+# ---------------------------------------------------------------------------
+# CORS des erreurs générées par Nginx (413, 502, 504…) : sans ces en-têtes,
+# le navigateur masque la vraie erreur et le front affichait « Erreur CORS ».
+# Les réponses de Laravel portent déjà leurs propres en-têtes : Nginx n'en
+# ajoute QUE si la réponse n'en a pas (sinon l'en-tête serait en double et
+# le navigateur refuserait la réponse).
+# /etc/nginx/cors-origins.map est généré au démarrage depuis la config
+# Laravel (php artisan cors:nginx-map, voir docker/entrypoint.sh).
+# ---------------------------------------------------------------------------
+map $http_origin $cors_allowed_origin {
+    default "";
+    include /etc/nginx/cors-origins.map;
+}
+
+map $upstream_http_access_control_allow_origin $cors_fallback_origin {
+    ""      $cors_allowed_origin;
+    default "";
+}
+
+map $cors_fallback_origin $cors_fallback_credentials {
+    ""      "";
+    default "true";
+}
+
+map $cors_fallback_origin $cors_fallback_vary {
+    ""      "";
+    default "Origin";
+}
+
+# Identifiant de requête : celui du front (X-Request-Id) s'il est valide,
+# sinon celui de Nginx. Transmis à Laravel, écrit dans le journal d'accès,
+# renvoyé au navigateur (par Laravel, ou par Nginx sur ses propres erreurs).
+map $http_x_request_id $req_id {
+    "~^[A-Za-z0-9-]{8,64}$" $http_x_request_id;
+    default                 $request_id;
+}
+
+map $upstream_http_x_request_id $request_id_fallback {
+    ""      $req_id;
+    default "";
+}
+
+log_format waelly '$remote_addr [$time_local] "$request" $status $body_bytes_sent '
+                  'rt=$request_time up=$upstream_status rid=$req_id origin="$http_origin"';
+
 server {
     # ${PORT} est substitué au démarrage du conteneur (envsubst, voir
     # docker/entrypoint.sh) — Render fournit ce port dynamiquement au
@@ -9,14 +54,16 @@ server {
     root /app/public;
     index index.php;
 
-    # Doit rester >= 2M : limite de validation du logo d'entreprise
-    # (CompanyController, règle 'max:2048' = 2 Mo) + marge pour l'overhead
-    # multipart/form-data. PHP lui-même plafonne déjà à 2M par défaut
-    # (upload_max_filesize natif, aucun php.ini actif dans l'image) : cette
-    # valeur ne doit pas être plus stricte que ce plafond existant.
-    client_max_body_size 3m;
+    # Envoi d'images : 5 Mo côté Laravel (config/media.php) + l'enveloppe
+    # multipart. Doit rester >= post_max_size de docker/php.ini (8M).
+    client_max_body_size 8m;
 
-    access_log /dev/stdout;
+    add_header Access-Control-Allow-Origin $cors_fallback_origin always;
+    add_header Access-Control-Allow-Credentials $cors_fallback_credentials always;
+    add_header Vary $cors_fallback_vary always;
+    add_header X-Request-Id $request_id_fallback always;
+
+    access_log /dev/stdout waelly;
     error_log /dev/stderr;
 
     # gzip est déjà activé par défaut (nginx.conf du paquet Debian, non
@@ -41,6 +88,12 @@ server {
         # "Proxy" arbitraire envoyé par le client d'écraser la variable
         # d'environnement HTTP_PROXY vue par PHP.
         fastcgi_param HTTP_PROXY "";
+        # Même identifiant de requête dans Nginx et dans Laravel.
+        fastcgi_param HTTP_X_REQUEST_ID $req_id;
+        # PHP s'arrête à 55 s, PHP-FPM à 60 s : Nginx attend un peu plus,
+        # pour que ce soit Laravel (ou FPM) qui réponde, pas un 504 muet.
+        fastcgi_read_timeout 65s;
+        fastcgi_send_timeout 65s;
     }
 
     # Bloque l'accès direct à tout fichier caché (.env, .git, etc.) s'il

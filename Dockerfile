@@ -138,6 +138,8 @@ RUN rm -f /etc/nginx/sites-enabled/default
 # Pool PHP-FPM : remplace le pool par défaut (TCP:9000) par un socket Unix
 # partagé avec Nginx — voir docker/php-fpm-pool.conf pour le détail.
 COPY docker/php-fpm-pool.conf /usr/local/etc/php-fpm.d/www.conf
+# Limites d'envoi et délais, cohérents avec Nginx et PHP-FPM (voir le fichier).
+COPY docker/php.ini /usr/local/etc/php/conf.d/zz-waelly.ini
 
 # Supervisor pilote Nginx + PHP-FPM comme deux process dans ce même
 # conteneur, avec redémarrage automatique en cas de crash de l'un des deux
