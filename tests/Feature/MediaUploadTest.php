@@ -144,6 +144,15 @@ beforeEach(function () {
     $this->withHeader('Accept-Language', 'fr');
 });
 
+// Les autres fichiers de test recréent leur propre schéma sans ces tables :
+// laissées là, elles feraient passer le code des images et des droits des
+// membres sur leurs données (PostgreSQL, base partagée entre les fichiers).
+afterEach(function () {
+    foreach (['media', 'member_permissions', 'collaborators'] as $table) {
+        Schema::dropIfExists($table);
+    }
+});
+
 function mediaOwner(string $tag = 'A'): User
 {
     $owner = User::create([
@@ -269,6 +278,21 @@ it('refuse un fichier de plus de 5 Mo', function () {
         ->assertStatus(422)
         ->assertJsonValidationErrors('file')
         ->assertJsonPath('errors.file.0', "L'image ne doit pas dépasser 5 Mo.");
+});
+
+it('refuse un fichier écarté par PHP (upload_max_filesize) avec le même message et les en-têtes CORS', function () {
+    $owner = mediaOwner();
+    config(['cors.allowed_origins' => ['https://waelly.com']]);
+    // Fichier de 6 à 8 Mo : Nginx le laisse passer, PHP le rejette (UPLOAD_ERR_INI_SIZE).
+    $rejected = new UploadedFile(mediaJpeg()->getPathname(), 'grosse.jpg', 'image/jpeg', UPLOAD_ERR_INI_SIZE, true);
+
+    $this->actingAs($owner)
+        ->post('/api/media', ['file' => $rejected, 'kind' => 'avatar'], ['Accept' => 'application/json', 'Origin' => 'https://waelly.com'])
+        ->assertStatus(422)
+        ->assertJsonPath('errors.file.0', "L'image ne doit pas dépasser 5 Mo.")
+        ->assertHeader('Access-Control-Allow-Origin', 'https://waelly.com');
+
+    expect(Media::count())->toBe(0);
 });
 
 it("refuse la photo d'un article à un caissier sans stock.edit, sans rien enregistrer", function () {
