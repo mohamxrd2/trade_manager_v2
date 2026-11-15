@@ -212,6 +212,22 @@ function mediaUpload($test, User $actor, UploadedFile $file, string $kind, ?stri
     ]), ['Accept' => 'application/json']);
 }
 
+it('envoie le fichier avec un cache d’un an (immuable : un remplacement change le nom)', function () {
+    $owner = mediaOwner();
+    $disk = Mockery::mock(Storage::disk('media'))->makePartial();
+    $disk->shouldReceive('put')
+        ->once()
+        ->withArgs(fn ($path, $contents, $options) => $options === [
+            'visibility' => 'public',
+            'ContentType' => 'image/webp',
+            'CacheControl' => 'public, max-age=31536000, immutable',
+        ])
+        ->andReturnTrue();
+    Storage::set('media', $disk);
+
+    mediaUpload($this, $owner, mediaJpeg(800, 600), 'avatar')->assertCreated();
+});
+
 it('convertit une photo en WebP, limite ses dimensions et la range sous {compte}/{sorte}/{uuid}.webp', function () {
     $owner = mediaOwner();
     $article = mediaArticle($owner);

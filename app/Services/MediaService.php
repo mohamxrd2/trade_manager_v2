@@ -26,6 +26,8 @@ class MediaService
 {
     public const DISK = 'media';
 
+    public const CACHE_CONTROL = 'public, max-age=31536000, immutable';
+
     /**
      * Valide, ré-encode et enregistre l'image. Rattachée à rien : voir attach().
      *
@@ -65,7 +67,13 @@ class MediaService
         }
 
         $path = "$accountId/$kind/" . Str::uuid() . '.webp';
-        Storage::disk(self::DISK)->put($path, $bytes, ['visibility' => 'public', 'ContentType' => 'image/webp']);
+        Storage::disk(self::DISK)->put($path, $bytes, [
+            'visibility' => 'public',
+            'ContentType' => 'image/webp',
+            // Un fichier n'est jamais modifié (un remplacement crée un nouveau nom) :
+            // navigateurs et CDN peuvent le garder un an sans revalider.
+            'CacheControl' => self::CACHE_CONTROL,
+        ]);
 
         return Media::create([
             'account_id' => $accountId,
