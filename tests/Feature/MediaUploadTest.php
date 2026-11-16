@@ -10,6 +10,7 @@ use App\Models\Variation;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
@@ -106,6 +107,7 @@ function createMediaTestSchema(): void
         $table->uuid('user_id');
         $table->uuid('article_id')->nullable();
         $table->uuid('variation_id')->nullable();
+        $table->uuid('variable_id')->nullable();
         $table->string('type');
         $table->integer('quantity')->nullable();
         $table->decimal('amount', 15, 2)->default(0);
@@ -450,4 +452,61 @@ it('supprime une photo jamais rattachée après 24 h', function () {
 
     expect(Media::find($orphan->id))->toBeNull();
     Storage::disk('media')->assertMissing($orphan->path);
+});
+
+/*
+| Bucket mal configuré en production (App\Support\MediaConfig).
+*/
+
+function mediaProductionWithout(array $missing): void
+{
+    app()['env'] = 'production';
+    $present = [];
+    foreach (['MEDIA_DISK_BUCKET', 'MEDIA_DISK_KEY', 'MEDIA_DISK_SECRET', 'MEDIA_DISK_ENDPOINT', 'MEDIA_DISK_URL'] as $name) {
+        $present[$name] = !in_array($name, $missing, true);
+    }
+    config(['media.required_env' => $present]);
+}
+
+it('en production, refuse les envois (503) et nomme les variables manquantes dans les logs', function () {
+    $owner = mediaOwner();
+    mediaProductionWithout(['MEDIA_DISK_KEY', 'MEDIA_DISK_URL']);
+    Log::spy();
+
+    mediaUpload($this, $owner, mediaJpeg(800, 600), 'avatar')
+        ->assertStatus(503)
+        ->assertJsonPath('code', 'media_unavailable')
+        ->assertJsonPath('message', "L'envoi d'images est momentanément indisponible. Le reste de l'application fonctionne normalement.");
+
+    Log::shouldHaveReceived('error')->withArgs(fn ($message, $context) => str_contains($message, 'MEDIA_DISK_KEY, MEDIA_DISK_URL')
+        && $context['missing'] === ['MEDIA_DISK_KEY', 'MEDIA_DISK_URL']);
+    expect(Media::count())->toBe(0)->and(Storage::disk('media')->allFiles())->toBe([]);
+});
+
+it('en production sans images, le reste de l’API fonctionne et /api/health le signale', function () {
+    $owner = mediaOwner();
+    mediaArticle($owner);
+    mediaProductionWithout(['MEDIA_DISK_BUCKET']);
+
+    $this->getJson('/api/health')->assertOk()->assertJsonPath('status', 'ok')->assertJsonPath('media', 'misconfigured');
+    $this->actingAs($owner)->getJson('/api/articles')->assertOk();
+});
+
+it('/api/health indique « ok » quand le bucket est complet, et hors production', function () {
+    mediaProductionWithout([]);
+    $this->getJson('/api/health')->assertJsonPath('media', 'ok');
+
+    app()['env'] = 'local';
+    config(['media.required_env' => array_fill_keys(['MEDIA_DISK_BUCKET', 'MEDIA_DISK_KEY', 'MEDIA_DISK_SECRET', 'MEDIA_DISK_ENDPOINT', 'MEDIA_DISK_URL'], false)]);
+    $this->getJson('/api/health')->assertJsonPath('media', 'ok');
+});
+
+it('media:check nomme les variables manquantes sans bloquer le démarrage', function () {
+    mediaProductionWithout(['MEDIA_DISK_SECRET', 'MEDIA_DISK_ENDPOINT']);
+    Log::spy();
+
+    $this->artisan('media:check')
+        ->expectsOutputToContain('MEDIA_DISK_SECRET, MEDIA_DISK_ENDPOINT')
+        ->assertExitCode(0);
+    Log::shouldHaveReceived('error')->once();
 });

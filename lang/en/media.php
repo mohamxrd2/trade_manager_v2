@@ -7,4 +7,5 @@ return [
     'forbidden' => 'You are not allowed to change this image.',
     'not_found' => 'Item not found.',
     'upload_failed' => 'The image could not be saved. Try again.',
+    'unavailable' => 'Image uploads are temporarily unavailable. The rest of the app works normally.',
 ];

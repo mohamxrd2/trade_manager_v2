@@ -11,6 +11,7 @@ use App\Models\User;
 use App\Models\Variation;
 use App\Services\MediaService;
 use App\Support\CurrentAccount;
+use App\Support\MediaConfig;
 use App\Support\Permissions;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -35,6 +36,19 @@ class MediaController extends Controller
     public function store(Request $request): JsonResponse
     {
         $this->useRequestLocale($request);
+
+        // Bucket mal configuré en production : refus net plutôt qu'une image
+        // perdue ou une URL privée enregistrée (voir App\Support\MediaConfig).
+        if (!MediaConfig::isReady()) {
+            MediaConfig::reportMissing('POST /api/media');
+
+            return response()->json([
+                'success' => false,
+                'code' => 'media_unavailable',
+                'message' => __('media.unavailable'),
+            ], 503);
+        }
+
         $maxKb = (int) config('media.max_upload_kb');
         $request->validate([
             'file' => ['required', 'file', 'max:' . $maxKb],

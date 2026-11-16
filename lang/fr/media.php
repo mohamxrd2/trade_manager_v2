@@ -7,4 +7,5 @@ return [
     'forbidden' => 'Vous n\'avez pas le droit de modifier cette image.',
     'not_found' => 'Élément introuvable.',
     'upload_failed' => 'L\'image n\'a pas pu être enregistrée. Réessayez.',
+    'unavailable' => 'L\'envoi d\'images est momentanément indisponible. Le reste de l\'application fonctionne normalement.',
 ];

@@ -27,4 +27,15 @@ return [
 
     // Un envoi jamais rattaché (article abandonné…) est supprimé après ce délai.
     'orphan_ttl_hours' => 24,
+
+    // Variables du bucket R2 obligatoires en production : présente ou non
+    // (jamais la valeur). Lu via la config, car env() est vide une fois la
+    // config mise en cache. Voir App\Support\MediaConfig.
+    'required_env' => [
+        'MEDIA_DISK_BUCKET' => trim((string) env('MEDIA_DISK_BUCKET')) !== '',
+        'MEDIA_DISK_KEY' => trim((string) env('MEDIA_DISK_KEY')) !== '',
+        'MEDIA_DISK_SECRET' => trim((string) env('MEDIA_DISK_SECRET')) !== '',
+        'MEDIA_DISK_ENDPOINT' => trim((string) env('MEDIA_DISK_ENDPOINT')) !== '',
+        'MEDIA_DISK_URL' => trim((string) env('MEDIA_DISK_URL')) !== '',
+    ],
 ];
