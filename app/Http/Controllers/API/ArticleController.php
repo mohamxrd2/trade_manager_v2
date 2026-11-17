@@ -7,6 +7,7 @@ use App\Models\Article;
 use App\Models\StockReplenishment;
 use App\Models\Variation;
 use App\Services\ArticleStockService;
+use App\Services\MediaService;
 use App\Support\ActivityLogger;
 use App\Support\CurrentAccount;
 use App\Support\Permissions;
@@ -75,6 +76,7 @@ class ArticleController extends Controller
                 'name' => 'required|string|max:255|unique:articles,name,NULL,id,user_id,' . CurrentAccount::id(),
                 'type' => 'required|in:simple,variable',
                 'image' => 'nullable|string|max:255',
+                'image_media_id' => 'nullable|uuid',
             ];
             $messages = [
                 'name.required' => 'Le nom de l\'article est obligatoire',
@@ -98,6 +100,7 @@ class ArticleController extends Controller
                     $rules['variations.*.quantity'] = 'required|integer|min:0';
                     $rules['variations.*.price'] = 'required|numeric|min:0.01';
                     $rules['variations.*.cost_price'] = 'nullable|numeric|min:0';
+                    $rules['variations.*.image_media_id'] = 'nullable|uuid';
                     $messages['variations.min'] = 'Au moins une variation est nécessaire';
                     $messages['variations.*.name.required'] = 'Le nom de la variation est obligatoire';
                     $messages['variations.*.quantity.min'] = 'La quantité doit être supérieure ou égale à 0';
@@ -150,15 +153,24 @@ class ArticleController extends Controller
                     'quantity' => $type === 'variable' ? 0 : $request->quantity,
                 ]);
 
+                // Photo envoyée avant l'enregistrement (POST /api/media sans owner_id).
+                $mediaService = app(MediaService::class);
+                if ($media = $mediaService->claim($request->input('image_media_id'), CurrentAccount::id(), 'product')) {
+                    $mediaService->attach($media, 'article', $article->id, [[$article, 'image_media_id', 'image']]);
+                }
+
                 if ($type === 'variable' && $hasVariationsPayload) {
                     foreach ($request->input('variations') as $variationData) {
-                        Variation::create([
+                        $variation = Variation::create([
                             'article_id' => $article->id,
                             'name' => trim($variationData['name']),
                             'quantity' => $variationData['quantity'],
                             'price' => $variationData['price'],
                             'cost_price' => $variationData['cost_price'] ?? null,
                         ]);
+                        if ($media = $mediaService->claim($variationData['image_media_id'] ?? null, CurrentAccount::id(), 'variation')) {
+                            $mediaService->attach($media, 'variation', $variation->id, [[$variation, 'image_media_id', 'image']]);
+                        }
                     }
 
                     // L'observer a déjà resynchronisé après chaque création ;

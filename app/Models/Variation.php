@@ -13,6 +13,17 @@ class Variation extends Model
     use HasUuids, SoftDeletes;
 
     /**
+     * Variation archivée (suppression douce) : sa photo est gardée.
+     * Suppression définitive : la photo part avec elle.
+     */
+    protected static function booted(): void
+    {
+        static::forceDeleted(function (Variation $variation) {
+            app(\App\Services\MediaService::class)->deleteForOwner('variation', $variation->id);
+        });
+    }
+
+    /**
      * The attributes that are mass assignable.
      *
      * @var array<int, string>

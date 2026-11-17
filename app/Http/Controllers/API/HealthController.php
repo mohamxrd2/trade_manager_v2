@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\API;
 
 use App\Http\Controllers\Controller;
+use App\Support\MediaConfig;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -27,6 +28,9 @@ class HealthController extends Controller
         return response()->json([
             'success' => true,
             'status' => 'ok',
+            // Bucket des images (voir App\Support\MediaConfig) : l'API reste
+            // « ok » même quand les envois d'images sont désactivés.
+            'media' => MediaConfig::isReady() ? 'ok' : 'misconfigured',
             'timestamp' => now()->toIso8601String(),
         ]);
     }

@@ -117,6 +117,7 @@ class VariationController extends Controller
                 'price' => 'required|numeric|min:0.01',
                 'cost_price' => 'nullable|numeric|min:0',
                 'image' => 'nullable|string|max:255',
+                'image_media_id' => 'nullable|uuid',
             ],[
                 'article_id.required' => 'L\'article est obligatoire',
                 'article_id.string' => 'L\'article doit être une chaîne de caractères',
@@ -189,6 +190,11 @@ class VariationController extends Controller
                 'cost_price' => $request->cost_price,
                 'image' => $request->image,
             ]);
+
+            $mediaService = app(\App\Services\MediaService::class);
+            if ($media = $mediaService->claim($request->input('image_media_id'), \App\Support\CurrentAccount::id(), 'variation')) {
+                $mediaService->attach($media, 'variation', $variation->id, [[$variation, 'image_media_id', 'image']]);
+            }
 
             // Charger les relations nécessaires pour les accessors
             $variation->load('article.user.settings');

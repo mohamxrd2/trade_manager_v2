@@ -113,6 +113,9 @@ Route::middleware(['auth:sanctum', 'active_member', 'must_change_password', 'acc
     
     // User profile routes
     Route::put('/user/profile', [UserProfileController::class, 'updateProfile']);
+    // Images (articles, variations, logo, photos) — voir MediaController.
+    Route::post('/media', [\App\Http\Controllers\API\MediaController::class, 'store'])->middleware('throttle:30,1');
+    Route::delete('/media/{kind}/{ownerId}', [\App\Http\Controllers\API\MediaController::class, 'destroy']);
     Route::put('/user/password', [UserProfileController::class, 'updatePassword']);
 
     // =========================================================================

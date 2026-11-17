@@ -51,6 +51,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         bcmath \
         intl \
         gd \
+        exif \
         zip \
         opcache \
     && apt-get purge -y --no-install-recommends \

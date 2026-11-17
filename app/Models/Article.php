@@ -22,6 +22,18 @@ class Article extends Model
      */
     protected static function booted(): void
     {
+        // Article supprimé (suppression définitive, pas d'archivage pour un
+        // article) : ses photos et celles de ses variations partent avec lui.
+        // Les variations sont supprimées par la base (cascade), sans
+        // événement : on s'en occupe ici.
+        static::deleting(function (Article $article) {
+            $media = app(\App\Services\MediaService::class);
+            $media->deleteForOwner('article', $article->id);
+            foreach (Variation::withTrashed()->where('article_id', $article->id)->pluck('id') as $variationId) {
+                $media->deleteForOwner('variation', $variationId);
+            }
+        });
+
         static::saving(function (Article $article) {
             if ($article->type !== 'variable' || !$article->exists || ArticleStockService::isSyncing()) {
                 return;

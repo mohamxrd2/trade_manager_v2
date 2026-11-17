@@ -34,6 +34,10 @@ if ! nginx -t 2>/dev/null; then
     : > /etc/nginx/cors-origins.map
 fi
 
+echo "[entrypoint] Bucket des images"
+# Nomme les variables MEDIA_DISK_* manquantes ; ne bloque jamais le démarrage.
+(php artisan media:check || true)
+
 echo "[entrypoint] Migrations"
 php artisan migrate --force
 
