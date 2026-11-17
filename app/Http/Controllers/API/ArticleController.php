@@ -345,10 +345,13 @@ class ArticleController extends Controller
                 ], 422);
             }
 
-            $updateData = [
-                'name' => $request->name,
-                'image' => $request->image,
-            ];
+            $updateData = ['name' => $request->name];
+
+            // La photo se gère par /api/media : un enregistrement qui n'envoie
+            // pas « image » (nom, prix…) ne doit pas l'effacer.
+            if ($request->exists('image')) {
+                $updateData['image'] = $request->image;
+            }
 
             $previousSalePrice = $article->sale_price;
 
