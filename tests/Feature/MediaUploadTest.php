@@ -419,6 +419,45 @@ it("supprimer un article supprime ses images ; archiver une variation garde la s
     expect(Media::count())->toBe(0)->and(Storage::disk('media')->allFiles())->toBe([]);
 });
 
+it("enregistrer le nom ou le prix d'un article garde sa photo", function () {
+    $owner = mediaOwner();
+    $article = mediaArticle($owner);
+    $url = mediaUpload($this, $owner, mediaJpeg(300, 300), 'product', $article->id)->assertCreated()->json('data.url');
+
+    // Comme la fiche article : nom, prix et quantité, sans « image ».
+    $this->actingAs($owner)->putJson("/api/articles/{$article->id}", ['name' => 'Pagne wax', 'sale_price' => 5000, 'quantity' => 4])
+        ->assertOk()
+        ->assertJsonPath('data.image', $url);
+
+    expect($article->fresh())->name->toBe('Pagne wax')->image->toBe($url)->image_media_id->not->toBeNull();
+    expect(Media::count())->toBe(1);
+});
+
+it("enregistrer une variation garde sa photo", function () {
+    $owner = mediaOwner();
+    $article = mediaArticle($owner);
+    $variation = Variation::create(['article_id' => $article->id, 'name' => 'Rouge', 'quantity' => 2, 'price' => 1000]);
+    $url = mediaUpload($this, $owner, mediaJpeg(300, 300), 'variation', $variation->id)->assertCreated()->json('data.url');
+
+    $this->actingAs($owner)->putJson("/api/variations/{$variation->id}", ['name' => 'Rouge vif', 'quantity' => 4, 'price' => 1000])
+        ->assertOk();
+
+    expect($variation->fresh())->name->toBe('Rouge vif')->image->toBe($url);
+});
+
+it("une image envoyée explicitement reste prise en compte (ancien champ texte)", function () {
+    $owner = mediaOwner();
+    $article = mediaArticle($owner);
+
+    $this->actingAs($owner)->putJson("/api/articles/{$article->id}", ['name' => 'Pagne', 'sale_price' => 5000, 'quantity' => 3, 'image' => 'https://ik.imagekit.io/x.jpg'])
+        ->assertOk();
+    expect($article->fresh()->image)->toBe('https://ik.imagekit.io/x.jpg');
+
+    $this->actingAs($owner)->putJson("/api/articles/{$article->id}", ['name' => 'Pagne', 'sale_price' => 5000, 'quantity' => 3, 'image' => null])
+        ->assertOk();
+    expect($article->fresh()->image)->toBeNull();
+});
+
 it("synchronise la photo d'un membre sur son accès et sa fiche associé", function () {
     $owner = mediaOwner();
     $member = mediaMember($owner, 'cashier');

@@ -283,13 +283,19 @@ class VariationController extends Controller
             $previousPrice = $variation->price;
 
             // Pas de plafond lié à article.quantity (supprimé).
-            $variation->update([
+            $updateData = [
                 'name' => trim($request->name),
                 'quantity' => $request->quantity,
                 'price' => $request->price,
                 'cost_price' => $request->cost_price,
-                'image' => $request->image,
-            ]);
+            ];
+
+            // Comme pour l'article : la photo n'est touchée que si « image » est envoyée.
+            if ($request->exists('image')) {
+                $updateData['image'] = $request->image;
+            }
+
+            $variation->update($updateData);
 
             if (bccomp((string) $previousPrice, (string) $request->price, 2) !== 0) {
                 ActivityLogger::log(Auth::id(), 'variation.price_changed', Variation::class, $variation->id, [
