@@ -2,7 +2,10 @@
 
 namespace App\Http\Controllers\API;
 
+use App\Exceptions\BarcodeException;
+use App\Http\Controllers\Concerns\UsesRequestLocale;
 use App\Http\Controllers\Controller;
+use App\Services\BarcodeService;
 use App\Support\ActivityLogger;
 use App\Support\CurrentAccount;
 use App\Support\Permissions;
@@ -13,10 +16,13 @@ use App\Models\Variation;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Validator;
 
 class VariationController extends Controller
 {
+    use UsesRequestLocale;
+
     /**
      * Display a listing of the variations for the authenticated user.
      */
@@ -118,6 +124,7 @@ class VariationController extends Controller
                 'cost_price' => 'nullable|numeric|min:0',
                 'image' => 'nullable|string|max:255',
                 'image_media_id' => 'nullable|uuid',
+                'barcode' => 'nullable|string|max:64',
             ],[
                 'article_id.required' => 'L\'article est obligatoire',
                 'article_id.string' => 'L\'article doit être une chaîne de caractères',
@@ -182,14 +189,26 @@ class VariationController extends Controller
             // ajoutée à tout moment, sans limite liée à une "quantité initiale"
             // de l'article (ce plafond est supprimé — l'article.quantity est
             // désormais un cache calculé, pas une borne).
-            $variation = Variation::create([
-                'article_id' => $request->article_id,
-                'name' => trim($request->name),
-                'quantity' => $request->quantity,
-                'price' => $request->price,
-                'cost_price' => $request->cost_price,
-                'image' => $request->image,
-            ]);
+            $this->useRequestLocale($request);
+            $barcodes = app(BarcodeService::class);
+            $barcode = $barcodes->clean($request->input('barcode'));
+
+            $variation = DB::transaction(function () use ($request, $article, $barcodes, $barcode) {
+                if ($barcode !== null) {
+                    $barcodes->lockAccount($article->user_id);
+                    $barcodes->assertAvailable($article->user_id, $barcode);
+                }
+
+                return Variation::create([
+                    'article_id' => $request->article_id,
+                    'name' => trim($request->name),
+                    'quantity' => $request->quantity,
+                    'price' => $request->price,
+                    'cost_price' => $request->cost_price,
+                    'image' => $request->image,
+                    'barcode' => $barcode,
+                ]);
+            });
 
             $mediaService = app(\App\Services\MediaService::class);
             if ($media = $mediaService->claim($request->input('image_media_id'), \App\Support\CurrentAccount::id(), 'variation')) {
@@ -205,6 +224,8 @@ class VariationController extends Controller
                 'data' => $variation
             ], 201);
 
+        } catch (BarcodeException $e) {
+            return $e->toResponse();
         } catch (\Exception $e) {
             return response()->json([
                 'success' => false,
@@ -251,6 +272,7 @@ class VariationController extends Controller
                 'price' => 'required|numeric|min:0.01',
                 'cost_price' => 'nullable|numeric|min:0',
                 'image' => 'nullable|string|max:255',
+                'barcode' => 'nullable|string|max:64',
             ], [
                 'price.required' => 'Le prix de la variation est obligatoire',
                 'price.numeric' => 'Le prix doit être un nombre',
@@ -295,7 +317,22 @@ class VariationController extends Controller
                 $updateData['image'] = $request->image;
             }
 
-            $variation->update($updateData);
+            // Code-barre : modifié seulement s'il est envoyé (vide = retiré).
+            $barcodes = app(BarcodeService::class);
+            $barcode = null;
+            if ($request->exists('barcode')) {
+                $this->useRequestLocale($request);
+                $barcode = $barcodes->clean($request->input('barcode'));
+                $updateData['barcode'] = $barcode;
+            }
+
+            DB::transaction(function () use ($variation, $article, $updateData, $barcodes, $barcode) {
+                if ($barcode !== null) {
+                    $barcodes->lockAccount($article->user_id);
+                    $barcodes->assertAvailable($article->user_id, $barcode, exceptVariationId: $variation->id);
+                }
+                $variation->update($updateData);
+            });
 
             if (bccomp((string) $previousPrice, (string) $request->price, 2) !== 0) {
                 ActivityLogger::log(Auth::id(), 'variation.price_changed', Variation::class, $variation->id, [
@@ -313,6 +350,8 @@ class VariationController extends Controller
                 'data' => $variation
             ]);
 
+        } catch (BarcodeException $e) {
+            return $e->toResponse();
         } catch (\Exception $e) {
             return response()->json([
                 'success' => false,

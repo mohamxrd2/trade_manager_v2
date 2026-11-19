@@ -2,11 +2,14 @@
 
 namespace App\Http\Controllers\API;
 
+use App\Exceptions\BarcodeException;
+use App\Http\Controllers\Concerns\UsesRequestLocale;
 use App\Http\Controllers\Controller;
 use App\Models\Article;
 use App\Models\StockReplenishment;
 use App\Models\Variation;
 use App\Services\ArticleStockService;
+use App\Services\BarcodeService;
 use App\Services\MediaService;
 use App\Support\ActivityLogger;
 use App\Support\CurrentAccount;
@@ -19,6 +22,8 @@ use Illuminate\Support\Facades\Validator;
 
 class ArticleController extends Controller
 {
+    use UsesRequestLocale;
+
     /**
      * Display a listing of the resource.
      */
@@ -77,6 +82,7 @@ class ArticleController extends Controller
                 'type' => 'required|in:simple,variable',
                 'image' => 'nullable|string|max:255',
                 'image_media_id' => 'nullable|uuid',
+                'barcode' => 'nullable|string|max:64',
             ];
             $messages = [
                 'name.required' => 'Le nom de l\'article est obligatoire',
@@ -101,6 +107,7 @@ class ArticleController extends Controller
                     $rules['variations.*.price'] = 'required|numeric|min:0.01';
                     $rules['variations.*.cost_price'] = 'nullable|numeric|min:0';
                     $rules['variations.*.image_media_id'] = 'nullable|uuid';
+                    $rules['variations.*.barcode'] = 'nullable|string|max:64';
                     $messages['variations.min'] = 'Au moins une variation est nécessaire';
                     $messages['variations.*.name.required'] = 'Le nom de la variation est obligatoire';
                     $messages['variations.*.quantity.min'] = 'La quantité doit être supérieure ou égale à 0';
@@ -143,14 +150,44 @@ class ArticleController extends Controller
                 }
             }
 
-            $article = DB::transaction(function () use ($request, $type, $hasVariationsPayload) {
+            // Codes-barres : un par article simple, un par variation (jamais sur l'article à variantes).
+            $this->useRequestLocale($request);
+            $barcodes = app(BarcodeService::class);
+            $articleBarcode = $barcodes->clean($request->input('barcode'));
+            if ($type === 'variable' && $articleBarcode !== null) {
+                throw new BarcodeException('barcode', 'barcode_variable_article', __('barcode.variable_article'));
+            }
+            $variationBarcodes = [];
+            if ($type === 'variable' && $hasVariationsPayload) {
+                foreach ($request->input('variations') as $index => $variationData) {
+                    $code = $barcodes->clean($variationData['barcode'] ?? null, "variations.{$index}.barcode");
+                    if ($code !== null && in_array($code, $variationBarcodes, true)) {
+                        throw new BarcodeException("variations.{$index}.barcode", 'barcode_duplicate', __('barcode.duplicate', ['code' => $code]));
+                    }
+                    $variationBarcodes[$index] = $code;
+                }
+            }
+
+            $article = DB::transaction(function () use ($request, $type, $hasVariationsPayload, $barcodes, $articleBarcode, $variationBarcodes) {
+                $accountId = CurrentAccount::id();
+                if ($articleBarcode !== null || array_filter($variationBarcodes)) {
+                    $barcodes->lockAccount($accountId);
+                    if ($articleBarcode !== null) {
+                        $barcodes->assertAvailable($accountId, $articleBarcode);
+                    }
+                    foreach (array_filter($variationBarcodes) as $index => $code) {
+                        $barcodes->assertAvailable($accountId, $code, field: "variations.{$index}.barcode");
+                    }
+                }
+
                 $article = Article::create([
-                    'user_id' => CurrentAccount::id(),
+                    'user_id' => $accountId,
                     'name' => $request->name,
                     'type' => $type,
                     'image' => $request->image,
                     'sale_price' => $type === 'variable' ? 0 : $request->sale_price,
                     'quantity' => $type === 'variable' ? 0 : $request->quantity,
+                    'barcode' => $articleBarcode,
                 ]);
 
                 // Photo envoyée avant l'enregistrement (POST /api/media sans owner_id).
@@ -160,13 +197,14 @@ class ArticleController extends Controller
                 }
 
                 if ($type === 'variable' && $hasVariationsPayload) {
-                    foreach ($request->input('variations') as $variationData) {
+                    foreach ($request->input('variations') as $index => $variationData) {
                         $variation = Variation::create([
                             'article_id' => $article->id,
                             'name' => trim($variationData['name']),
                             'quantity' => $variationData['quantity'],
                             'price' => $variationData['price'],
                             'cost_price' => $variationData['cost_price'] ?? null,
+                            'barcode' => $variationBarcodes[$index] ?? null,
                         ]);
                         if ($media = $mediaService->claim($variationData['image_media_id'] ?? null, CurrentAccount::id(), 'variation')) {
                             $mediaService->attach($media, 'variation', $variation->id, [[$variation, 'image_media_id', 'image']]);
@@ -195,6 +233,8 @@ class ArticleController extends Controller
                 'message' => 'Article créé avec succès',
                 'data' => $article
             ], 201);
+        } catch (BarcodeException $e) {
+            return $e->toResponse();
         } catch (\Illuminate\Database\QueryException $e) {
             // Contrainte unique (article_id, lower(trim(name))) sur variations —
             // filet de sécurité si la pré-vérification applicative a laissé
@@ -311,6 +351,7 @@ class ArticleController extends Controller
             $rules = [
                 'name' => 'required|string|max:255|unique:articles,name,' . $id . ',id,user_id,' . CurrentAccount::id(),
                 'image' => 'nullable|string|max:255',
+                'barcode' => 'nullable|string|max:64',
             ];
             $messages = [
                 'name.required' => 'Le nom de l\'article est obligatoire',
@@ -360,7 +401,25 @@ class ArticleController extends Controller
                 $updateData['quantity'] = $request->quantity;
             }
 
-            $article->update($updateData);
+            // Code-barre : modifié seulement s'il est envoyé (vide = retiré).
+            $barcodes = app(BarcodeService::class);
+            $barcode = null;
+            if ($request->exists('barcode')) {
+                $this->useRequestLocale($request);
+                $barcode = $barcodes->clean($request->input('barcode'));
+                if ($article->type === 'variable' && $barcode !== null) {
+                    throw new BarcodeException('barcode', 'barcode_variable_article', __('barcode.variable_article'));
+                }
+                $updateData['barcode'] = $barcode;
+            }
+
+            DB::transaction(function () use ($article, $updateData, $barcodes, $barcode) {
+                if ($barcode !== null) {
+                    $barcodes->lockAccount($article->user_id);
+                    $barcodes->assertAvailable($article->user_id, $barcode, exceptArticleId: $article->id);
+                }
+                $article->update($updateData);
+            });
 
             if ($article->type === 'simple' && bccomp((string) $previousSalePrice, (string) $request->sale_price, 2) !== 0) {
                 ActivityLogger::log(Auth::id(), 'article.price_changed', Article::class, $article->id, [
@@ -384,6 +443,8 @@ class ArticleController extends Controller
                 'message' => 'Article modifié avec succès',
                 'data' => $article
             ]);
+        } catch (BarcodeException $e) {
+            return $e->toResponse();
         } catch (\Exception $e) {
             return response()->json([
                 'success' => false,

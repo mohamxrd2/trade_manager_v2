@@ -82,6 +82,7 @@ function createVariableArticlesSchema(): void
         $table->integer('quantity');
         $table->string('type');
         $table->string('image')->nullable();
+        $table->string('barcode', 64)->nullable();
         $table->timestamps();
     });
 
@@ -94,6 +95,7 @@ function createVariableArticlesSchema(): void
         $table->decimal('cost_price', 15, 2)->nullable();
         $table->unsignedInteger('low_stock_threshold')->nullable();
         $table->string('image')->nullable();
+        $table->string('barcode', 64)->nullable();
         $table->timestamps();
         $table->timestamp('deleted_at')->nullable();
     });

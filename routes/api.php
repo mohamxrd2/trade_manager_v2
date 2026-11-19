@@ -3,6 +3,7 @@
 use App\Http\Controllers\API\AnalyticsController;
 use App\Http\Controllers\API\ArticleController;
 use App\Http\Controllers\API\AuthController;
+use App\Http\Controllers\API\BarcodeController;
 use App\Http\Controllers\API\ClientController;
 use App\Http\Controllers\API\CollaboratorController;
 use App\Http\Controllers\API\CompanyController;
@@ -87,6 +88,12 @@ Route::middleware(['auth:sanctum', 'active_member', 'must_change_password', 'acc
     Route::post('/variations', [VariationController::class, 'store']);
     Route::put('/variations/{id}', [VariationController::class, 'update']);
     Route::delete('/variations/{id}', [VariationController::class, 'destroy']);
+
+    // Codes-barres — droits vérifiés dans BarcodeController (vendre ou voir le stock pour chercher, stock.edit pour générer).
+    Route::post('/barcodes/generate-missing', [BarcodeController::class, 'generateMissing']);
+    Route::get('/barcodes/{code}', [BarcodeController::class, 'show'])->where('code', '.+')->middleware('throttle:240,1');
+    Route::post('/articles/{id}/barcode', [BarcodeController::class, 'generateForArticle']);
+    Route::post('/variations/{id}/barcode', [BarcodeController::class, 'generateForVariation']);
     
     // Transactions routes
     Route::get('/transactions', [TransactionController::class, 'index']);

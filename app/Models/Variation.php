@@ -36,6 +36,7 @@ class Variation extends Model
         'cost_price',
         'low_stock_threshold',
         'image',
+        'barcode',
     ];
 
     /**

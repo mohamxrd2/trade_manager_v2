@@ -74,6 +74,7 @@ function createMediaTestSchema(): void
         $table->string('type');
         $table->string('image')->nullable();
         $table->uuid('image_media_id')->nullable();
+        $table->string('barcode', 64)->nullable();
         $table->timestamps();
     });
     Schema::create('variations', function (Blueprint $table) {
@@ -86,6 +87,7 @@ function createMediaTestSchema(): void
         $table->unsignedInteger('low_stock_threshold')->nullable();
         $table->string('image')->nullable();
         $table->uuid('image_media_id')->nullable();
+        $table->string('barcode', 64)->nullable();
         $table->timestamps();
         $table->softDeletes();
     });
