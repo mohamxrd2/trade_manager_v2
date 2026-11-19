@@ -70,6 +70,7 @@ class Article extends Model
         'quantity',
         'type',
         'image',
+        'barcode',
     ];
 
     /**
