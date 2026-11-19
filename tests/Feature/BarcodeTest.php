@@ -523,3 +523,82 @@ it("un membre travaille sur les codes de SON compte : il ne génère pas pour l'
     $this->actingAs($member)->postJson('/api/articles', ['name' => 'Savon', 'type' => 'simple', 'sale_price' => 500, 'quantity' => 1, 'barcode' => 'SAVON-01'])->assertCreated();
     $this->actingAs($owner)->getJson('/api/barcodes/SAVON-01')->assertOk();
 });
+
+/*
+| Codes mal formés ou inconnus : jamais de 500
+*/
+
+it('« 005264 » (6 chiffres, Code 128) inconnu → 404 « introuvable », pas 500', function () {
+    $owner = barcodeOwner();
+
+    $this->actingAs($owner)->getJson('/api/barcodes/005264')
+        ->assertNotFound()
+        ->assertJsonPath('code', 'barcode_not_found')
+        ->assertJsonPath('barcode', '005264');
+});
+
+it('un code avec des zéros au début est trouvé, zéros conservés partout', function () {
+    $owner = barcodeOwner();
+
+    $created = $this->actingAs($owner)->postJson('/api/articles', ['name' => 'Bonbon', 'type' => 'simple', 'sale_price' => 25, 'quantity' => 100, 'barcode' => '005264'])
+        ->assertCreated()->assertJsonPath('data.barcode', '005264');
+
+    $this->actingAs($owner)->getJson('/api/barcodes/005264')
+        ->assertOk()
+        ->assertJsonPath('barcode', null)
+        ->assertJsonPath('data.barcode', '005264')
+        ->assertJsonPath('data.article.id', $created->json('data.id'))
+        ->assertJsonPath('data.article.barcode', '005264');
+    expect(Article::first()->barcode)->toBe('005264');
+});
+
+it('un code avec des caractères interdits ou une clé fausse → 422 avec un message clair', function () {
+    $owner = barcodeOwner();
+
+    $this->actingAs($owner)->getJson('/api/barcodes/' . rawurlencode('SAV_01#'))
+        ->assertStatus(422)
+        ->assertJsonPath('code', 'barcode_format')
+        ->assertJsonPath('message', 'Code-barre non reconnu. Utilisez un EAN-13, EAN-8, UPC-A, ou un code de 4 à 32 caractères (lettres, chiffres, - . /).');
+    $this->actingAs($owner)->getJson('/api/barcodes/3017620422004')
+        ->assertStatus(422)->assertJsonPath('code', 'barcode_check_digit');
+});
+
+it('génération en lot : article simple, article à variantes, article qui a déjà un code', function () {
+    $owner = barcodeOwner();
+    $simple = barcodeSimple($owner, 'Savon');
+    [$pagne, $red, $blue] = barcodeVariable($owner);
+    $existing = barcodeSimple($owner, 'Nutella', '3017620422003');
+
+    $this->actingAs($owner)->postJson('/api/barcodes/generate-missing', ['article_ids' => [$simple->id, $pagne->id, $existing->id]])
+        ->assertOk()
+        ->assertJsonPath('data.count', 3)
+        ->assertJsonPath('data.failed_count', 0)
+        ->assertJsonPath('message', '3 codes-barres créés.');
+
+    expect([$simple->fresh()->barcode, $red->fresh()->barcode, $blue->fresh()->barcode])->each->toMatch('/^2\d{12}$/')
+        ->and($existing->fresh()->barcode)->toBe('3017620422003')
+        ->and($pagne->fresh()->barcode)->toBeNull();
+});
+
+it('génération en lot : un produit en échec n’empêche pas les autres, et l’échec est expliqué', function () {
+    $owner = barcodeOwner();
+    $simple = barcodeSimple($owner, 'Savon');
+    [, $red, $blue] = barcodeVariable($owner);
+    $blue->update(['name' => 'Bleu-panne']);
+    Variation::saving(function (Variation $variation) {
+        if ($variation->name === 'Bleu-panne' && $variation->isDirty('barcode')) {
+            throw new RuntimeException('panne simulée');
+        }
+    });
+
+    $response = $this->actingAs($owner)->postJson('/api/barcodes/generate-missing')
+        ->assertOk()
+        ->assertJsonPath('data.count', 2)
+        ->assertJsonPath('data.failed_count', 1)
+        ->assertJsonPath('data.failed.0.product', 'Pagne — Bleu-panne')
+        ->assertJsonPath('data.failed.0.reason', "Erreur inattendue lors de l'enregistrement du code.");
+    expect($response->json('message'))->toBe("2 codes-barres créés. 1 produit n'a pas pu recevoir de code.")
+        ->and($simple->fresh()->barcode)->not->toBeNull()
+        ->and($red->fresh()->barcode)->not->toBeNull()
+        ->and($blue->fresh()->barcode)->toBeNull();
+});

@@ -11,4 +11,8 @@ return [
     'not_found' => 'No product has this barcode.',
     'exhausted' => 'Could not generate a barcode right now. Try again.',
     'generated' => '{0} No barcode to create.|{1} 1 barcode created.|[2,*] :count barcodes created.',
+    'item_failed' => 'Unexpected error while saving the code.',
+    'generated_failed' => '{1} 1 product could not get a code.|[2,*] :count products could not get a code.',
+    'generate_failed' => 'The barcodes could not be generated (server error). Try again; if it keeps happening, contact us.',
+    'lookup_failed' => 'The code lookup failed (server error). Try again.',
 ];

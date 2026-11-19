@@ -222,19 +222,37 @@ class BarcodeService
      *
      * @throws BarcodeException
      */
-    public function generateMissing(string $accountId, ?array $articleIds = null, ?array $variationIds = null): int
+    /**
+     * Réussite partielle : chaque produit est enregistré dans son propre
+     * point de sauvegarde — un produit qui échoue n'annule pas les autres.
+     *
+     * @return array{created: int, failed: array<int, array{id: string, product: string, reason: string}>}
+     */
+    public function generateMissing(string $accountId, ?array $articleIds = null, ?array $variationIds = null): array
     {
         return DB::transaction(function () use ($accountId, $articleIds, $variationIds) {
             $this->lockAccount($accountId);
 
             $reserved = [];
+            $failed = [];
             foreach ($this->missing($accountId, $articleIds, $variationIds) as $item) {
-                $code = $this->nextInternalCode($accountId, $reserved);
-                $reserved[$code] = true;
-                $item->forceFill(['barcode' => $code])->save();
+                try {
+                    $code = $this->nextInternalCode($accountId, $reserved);
+                    DB::transaction(fn () => $item->forceFill(['barcode' => $code])->save());
+                    $reserved[$code] = true;
+                } catch (\Throwable $e) {
+                    $item->barcode = null;
+                    report($e);
+                    $article = $item instanceof Variation ? $item->article : $item;
+                    $failed[] = [
+                        'id' => (string) $item->id,
+                        'product' => $this->displayName($article, $item instanceof Variation ? $item : null),
+                        'reason' => $e instanceof BarcodeException ? $e->getMessage() : __('barcode.item_failed'),
+                    ];
+                }
             }
 
-            return count($reserved);
+            return ['created' => count($reserved), 'failed' => $failed];
         });
     }
 

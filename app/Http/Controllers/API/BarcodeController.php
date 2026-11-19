@@ -40,8 +40,26 @@ class BarcodeController extends Controller
         }
         $this->useRequestLocale($request);
 
+        // Toujours une chaîne : « 005264 » garde ses zéros.
         $code = Barcode::normalize(rawurldecode($code));
-        $found = $code === '' ? null : $this->barcodes->find(CurrentAccount::id(), $code);
+        $error = Barcode::validate($code)['error'];
+        if ($error !== null) {
+            return response()->json([
+                'success' => false,
+                'code' => 'barcode_' . $error,
+                'message' => __('barcode.' . $error),
+                'errors' => ['barcode' => [__('barcode.' . $error)]],
+                'barcode' => $code,
+            ], 422);
+        }
+
+        try {
+            $found = $this->barcodes->find(CurrentAccount::id(), $code);
+        } catch (\Throwable $e) {
+            report($e);
+
+            return response()->json(['success' => false, 'code' => 'barcode_lookup_failed', 'message' => __('barcode.lookup_failed')], 500);
+        }
         if (!$found) {
             return response()->json([
                 'success' => false,
@@ -134,18 +152,36 @@ class BarcodeController extends Controller
         $variationIds = $request->has('variation_ids') ? $request->input('variation_ids', []) : null;
 
         try {
-            $count = $request->boolean('dry_run')
-                ? $this->barcodes->missing($accountId, $articleIds, $variationIds)->count()
-                : $this->barcodes->generateMissing($accountId, $articleIds, $variationIds);
+            if ($request->boolean('dry_run')) {
+                $count = $this->barcodes->missing($accountId, $articleIds, $variationIds)->count();
+
+                return response()->json([
+                    'success' => true,
+                    'message' => trans_choice('barcode.generated', $count, ['count' => $count]),
+                    'data' => ['count' => $count, 'failed_count' => 0, 'failed' => [], 'dry_run' => true],
+                ]);
+            }
+            $result = $this->barcodes->generateMissing($accountId, $articleIds, $variationIds);
         } catch (BarcodeException $e) {
             return $e->toResponse();
+        } catch (\Throwable $e) {
+            report($e);
+
+            return response()->json(['success' => false, 'code' => 'barcode_generate_failed', 'message' => __('barcode.generate_failed')], 500);
+        }
+
+        $count = $result['created'];
+        $failedCount = count($result['failed']);
+        $message = trans_choice('barcode.generated', $count, ['count' => $count]);
+        if ($failedCount > 0) {
+            $message .= ' ' . trans_choice('barcode.generated_failed', $failedCount, ['count' => $failedCount]);
         }
 
         return response()->json([
-            'success' => true,
-            'message' => trans_choice('barcode.generated', $count, ['count' => $count]),
-            'data' => ['count' => $count, 'dry_run' => $request->boolean('dry_run')],
-        ]);
+            'success' => $failedCount === 0 || $count > 0,
+            'message' => $message,
+            'data' => ['count' => $count, 'failed_count' => $failedCount, 'failed' => $result['failed'], 'dry_run' => false],
+        ], $count === 0 && $failedCount > 0 ? 422 : 200);
     }
 
     private function generate(Article|Variation $item): JsonResponse
