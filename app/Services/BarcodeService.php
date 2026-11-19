@@ -87,18 +87,42 @@ class BarcodeService
      */
     public function find(string $accountId, string $code): ?array
     {
-        $article = Article::where('user_id', $accountId)->where('barcode', $code)->first();
-        if ($article) {
-            return ['article' => $article, 'variation' => null];
+        foreach (self::equivalents($code) as $candidate) {
+            $article = Article::where('user_id', $accountId)->where('barcode', $candidate)->first();
+            if ($article) {
+                return ['article' => $article, 'variation' => null];
+            }
+
+            // Variations archivées exclues (SoftDeletes) : leur code peut resservir.
+            $variation = Variation::where('barcode', $candidate)
+                ->whereHas('article', fn ($query) => $query->where('user_id', $accountId))
+                ->with('article')
+                ->first();
+            if ($variation) {
+                return ['article' => $variation->article, 'variation' => $variation];
+            }
         }
 
-        // Variations archivées exclues (SoftDeletes) : leur code peut resservir.
-        $variation = Variation::where('barcode', $code)
-            ->whereHas('article', fn ($query) => $query->where('user_id', $accountId))
-            ->with('article')
-            ->first();
+        return null;
+    }
 
-        return $variation ? ['article' => $variation->article, 'variation' => $variation] : null;
+    /**
+     * Un UPC-A (12 chiffres) est un EAN-13 commençant par 0 : selon le
+     * lecteur, le même produit arrive avec 12 ou 13 chiffres. Les deux
+     * écritures désignent le même code.
+     *
+     * @return array<int, string>
+     */
+    public static function equivalents(string $code): array
+    {
+        if (ctype_digit($code) && strlen($code) === 13 && $code[0] === '0') {
+            return [$code, substr($code, 1)];
+        }
+        if (ctype_digit($code) && strlen($code) === 12) {
+            return [$code, '0' . $code];
+        }
+
+        return [$code];
     }
 
     public function displayName(Article $article, ?Variation $variation): string

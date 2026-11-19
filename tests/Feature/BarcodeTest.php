@@ -446,6 +446,15 @@ it('trouve la variante par son code (avec son article)', function () {
         ->assertJsonPath('data.variation.remaining_quantity', 4);
 });
 
+it('trouve un UPC-A lu avec 12 ou 13 chiffres, et refuse le doublon sous l’autre écriture', function () {
+    $owner = barcodeOwner();
+    $article = barcodeSimple($owner, 'Coca', '036000291452');
+
+    $this->actingAs($owner)->getJson('/api/barcodes/0036000291452')->assertOk()->assertJsonPath('data.article.id', $article->id);
+    $this->actingAs($owner)->postJson('/api/articles', ['name' => 'Autre', 'type' => 'simple', 'sale_price' => 1, 'quantity' => 1, 'barcode' => '0036000291452'])
+        ->assertStatus(422)->assertJsonPath('code', 'barcode_taken');
+});
+
 it('renvoie un 404 propre pour un code inconnu, une variante archivée ou un code d’un autre compte', function () {
     $owner = barcodeOwner();
     [, $red] = barcodeVariable($owner);
